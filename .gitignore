@@ -218,3 +218,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== LAN Chat: dữ liệu sinh ra khi chạy =====
+# (downloads/ đã có ở trên)
+*.part
+logs/
+*.log
+
+# Wireshark capture: nặng, chứa IP/MAC thật — chỉ nộp ảnh chụp
+*.pcap
+*.pcapng
+
+# File test lớn khi thử /send
+test_files/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
