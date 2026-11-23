@@ -173,6 +173,6 @@ Chạy hết danh sách kiểm thử tích hợp trong tài liệu phân công t
 
 | Thành viên | Phụ trách |
 |---|---|
-| Người 1 — *(tên)* | UDP discovery, danh sách peer, Wireshark UDP |
-| Người 2 — *(tên)* | Giao thức TCP, framing, quản lý kết nối, Wireshark TCP |
-| Người 3 — *(tên)* | Giao diện, hội thoại, truyền file, ghép chương trình |
+| Người 1 — *Phạm Gia Huy* | UDP discovery, danh sách peer, Wireshark UDP |
+| Người 2 — *Mai Nguyễn Đăng Khoa* | Giao thức TCP, framing, quản lý kết nối, Wireshark TCP |
+| Người 3 — *Lê Nam Khánh* | Giao diện, hội thoại, truyền file, ghép chương trình |
