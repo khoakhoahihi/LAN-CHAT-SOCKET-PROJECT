@@ -195,7 +195,9 @@ sequenceDiagram
 Nếu đã có kết nối chat với cùng một `peer_id` (đã mở hoặc đang bắt tay) mà lại xuất hiện thêm một kết nối nữa, thì **giữ kết nối do bên có `peer_id` nhỏ hơn khởi tạo** (so sánh chuỗi). Hai bên áp dụng cùng quy tắc nên luôn ra cùng kết quả:
 
 - Nếu mình là **bên nhận** của kết nối bị loại: gửi `INTRO_ERR|…|DUPLICATE|…` rồi đóng.
-- Nếu mình là **bên khởi tạo** và nhận `DUPLICATE`: đóng kết nối của mình, rồi chờ tối đa 2 giây để kết nối từ phía bên kia được đăng ký và dùng kết nối đó.
+- Nếu mình là **bên khởi tạo** và nhận `DUPLICATE`: đóng kết nối của mình, rồi chờ tối đa `DUPLICATE_WAIT` (2 giây) để kết nối từ phía bên kia được đăng ký và dùng kết nối đó. Hết thời gian mà vẫn chưa có thì báo lỗi kết nối.
+
+Kết nối bị loại **không phát sự kiện nào**. Lý do: sự kiện gắn với `peer_id`, mà peer đó vẫn còn kết nối được giữ. Nếu phát `CONNECTION_CLOSED`, giao diện sẽ báo nhầm là cuộc chat đã đóng. `CHAT_CONNECTED` chỉ phát **một lần**, khi kết nối được giữ được đăng ký.
 
 ### 3.3 Đóng kết nối
 
@@ -205,7 +207,7 @@ Nếu đã có kết nối chat với cùng một `peer_id` (đã mở hoặc đ
 | Nhận `BYE` từ bên kia | `bye` |
 | `recv()` trả về `b""` hoặc gặp lỗi socket khi chưa nhận `BYE` | `lost` |
 | Lỗi giao thức | `protocol_error` |
-| Bị loại vì trùng kết nối (mục 3.2) | `duplicate` (không hiển thị cho người dùng) |
+| Bị loại vì trùng kết nối (mục 3.2) | không phát `CONNECTION_CLOSED` |
 
 Quy tắc khi đóng:
 - Đóng kết nối chat **không xoá** lịch sử và số tin chưa đọc.
@@ -231,15 +233,22 @@ sequenceDiagram
     Note over S,R: Bên gửi so hash rồi đóng kết nối
 ```
 
+**Trạng thái socket khi bàn giao.** Ở cả hai phía (`on_file_connection` bên nhận, `open_file_connection` bên gửi), người 2 bàn giao socket ở chế độ blocking: gọi `settimeout(None)` để bỏ timeout 5 giây của bước `INTRO`. Sau đó người 3 tự đặt `FILE_IDLE_TIMEOUT` hoặc `FILE_DONE_TIMEOUT` theo mục 2.5.
+
 ### 4.2 Quy tắc bên gửi
 
 - Chỉ gửi cho người đang được chọn chat. Kiểm tra file tồn tại và đọc được **trước** khi mở kết nối.
 - Đọc file theo khối 64 KiB, gửi bằng `sendall()`, đồng thời cập nhật SHA-256 theo từng khối.
 - Phát `FILE_PROGRESS` mỗi khi tiến độ tăng ít nhất 1%.
-- Sau khi gửi đủ byte, chờ phản hồi:
-  - Nhận `FILE_DONE` và hash khớp: thành công.
-  - Hash không khớp: báo lỗi "file nhận bị sai".
-  - Hết 10 giây hoặc mất kết nối: báo **"đã gửi 100%, chưa có xác nhận từ bên nhận"**. Không được báo thành công trong trường hợp này.
+- Sau khi gửi đủ byte, chờ phản hồi. Có ba kết quả, mỗi kết quả ứng với một sự kiện:
+
+  | Kết quả | Sự kiện | Hiển thị |
+  |---|---|---|
+  | Nhận `FILE_DONE`, hash khớp | `FILE_COMPLETED` | "Done" |
+  | Nhận `FILE_DONE`, hash không khớp; hoặc nhận `FILE_ERR`; hoặc lỗi trước khi gửi đủ byte | `ERROR` | "file nhận bị sai" hoặc nội dung lỗi |
+  | Đã gửi đủ byte nhưng hết `FILE_DONE_TIMEOUT` hoặc mất kết nối mà chưa có phản hồi | `FILE_UNCONFIRMED` | "đã gửi 100%, chưa có xác nhận từ bên nhận" |
+
+  Trường hợp thứ ba **không được báo thành công**.
 - File rỗng (`size = 0`) hợp lệ: gửi `FILE_META` rồi chờ `FILE_DONE` ngay.
 
 ### 4.3 Quy tắc bên nhận
@@ -247,7 +256,7 @@ sequenceDiagram
 - **Làm sạch tên file:** đổi `\` thành `/`, rồi chỉ lấy phần sau dấu `/` cuối cùng. Từ chối tên rỗng, `.` hoặc `..` bằng `FILE_ERR …|BAD_META|…`. Mục đích là chặn path traversal như `../../x`.
 - **Giới hạn kích thước:** `size` không vượt quá `MAX_FILE_SIZE` (2 GiB), nếu vượt thì gửi `FILE_ERR …|TOO_LARGE|…` rồi đóng.
 - **Ghi tạm:** tự tạo `downloads/` nếu chưa có. Ghi vào `downloads/<tên>.part`.
-- **Hoàn tất:** khi nhận đủ `size` byte, đóng file và đổi tên `.part` thành tên thật. Nếu trùng tên, thêm hậu tố: `slides (1).pdf`, `slides (2).pdf`, … Sau đó gửi `FILE_DONE` với SHA-256 của dữ liệu đã nhận.
+- **Hoàn tất:** khi nhận đủ `size` byte, đóng file và đổi tên `.part` thành tên thật. Nếu trùng tên, thêm hậu tố: `slides (1).pdf`, `slides (2).pdf`, … Sau đó gửi `FILE_DONE` với SHA-256 của dữ liệu đã nhận, rồi phát `FILE_COMPLETED` kèm đường dẫn file.
 - **Lỗi giữa chừng** (mất kết nối, timeout 15 giây, lỗi ghi đĩa): **xoá file `.part`** rồi phát `ERROR`.
 - Nhận thừa byte sau đủ `size` là lỗi giao thức.
 
@@ -270,6 +279,11 @@ sequenceDiagram
 | `INTRO_TIMEOUT` | 5 s |
 | `FILE_IDLE_TIMEOUT` | 15 s |
 | `FILE_DONE_TIMEOUT` | 10 s |
+| `DUPLICATE_WAIT` | 2 s |
+| `GOODBYE_REPEAT` | 2 lần |
+| `GOODBYE_GAP` | 0,1 s |
+| `PROGRESS_STEP` | 1 % |
+| `MAX_NAME_LEN` | 20 ký tự |
 
 ## 6. Phiên mẫu ở mức byte
 
