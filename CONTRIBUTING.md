@@ -66,6 +66,14 @@ def recv_exact(sock, n: int) -> bytes
 def send_frame(sock, ftype: str, payload: bytes) -> None   # không tự khóa; transport khóa thay
 def recv_frame(sock) -> tuple[str, bytes]                   # đọc header từng byte, không đọc dư
 
+# Kiểm tra trường và tạo/đọc payload (protocol.md mục 0 và 2.4); parse_* sai cấu trúc: raise ProtocolError
+def is_valid_name(name: str) -> bool        # main.py dùng để kiểm tra --name
+def is_valid_peer_id(peer_id: str) -> bool  # Người 1 dùng khi đọc HELLO
+def make_intro(kind: str, peer_id: str, name: str) -> bytes
+def parse_intro(payload: bytes) -> tuple[str, str, str]     # (kind, peer_id, name)
+def parse_intro_ok(payload: bytes) -> tuple[str, str]       # (peer_id, name)
+def parse_intro_err(payload: bytes) -> tuple[str, str]      # (code, message)
+
 # transport.py
 class ConnectError(Exception): ...    # message đọc được cho người dùng
 class NotConnected(Exception): ...
@@ -77,17 +85,23 @@ class Transport:
                  events: queue.Queue, on_file_connection: FileHandler): ...
     def start(self) -> None
     def connect_chat(self, peer: Peer) -> None        # đã có kết nối thì dùng lại; lỗi: raise ConnectError
-    def send_chat(self, peer_id: str, text: str) -> None   # chưa có kết nối: raise NotConnected
+    def send_chat(self, peer_id: str, text: str) -> None
+        # chưa có kết nối: raise NotConnected
+        # text chứa \n hoặc \r, hoặc dài hơn MAX_FRAME_PAYLOAD byte UTF-8: raise ValueError
+        # lỗi socket khi gửi: đóng kết nối (CONNECTION_CLOSED, reason "lost") rồi raise NotConnected
     def disconnect_chat(self, peer_id: str) -> None   # gửi BYE và đóng; không có kết nối thì bỏ qua
     def is_connected(self, peer_id: str) -> bool
     def open_file_connection(self, peer: Peer) -> socket.socket
         # đã xong INTRO FILE / INTRO_OK; từ đây socket thuộc về người gọi
+        # lỗi connect, timeout, INTRO_ERR hoặc peer_id trong INTRO_OK không khớp: raise ConnectError
     def stop(self) -> None
 ```
 
 - `on_file_connection` được gọi **trên một luồng mới** do `Transport` tạo, sau khi đã gửi `INTRO_OK`. Không gọi trên luồng acceptor.
 - Từ lúc gọi `on_file_connection` hoặc trả về từ `open_file_connection`, `Transport` không đọc, không ghi, không đóng socket đó nữa.
-- `connect_chat` và `send_chat` có thể chặn tối đa vài giây. Giao diện được phép gọi trực tiếp, nhưng không gọi khi đang giữ khóa màn hình.
+- Socket file được bàn giao ở chế độ blocking (`settimeout(None)`). Người 3 tự đặt timeout cho phần truyền file (protocol.md mục 4.1).
+- `connect_chat` có thể chặn tới khoảng **10 giây**: `CONNECT_TIMEOUT` 3 s + `INTRO_TIMEOUT` 5 s + `DUPLICATE_WAIT` 2 s. Nên gọi nó trên một luồng phụ để dòng nhập không bị đứng. Không gọi khi đang giữ khóa màn hình.
+- `CHAT_CONNECTED` chỉ phát một lần cho mỗi kết nối được đăng ký. Kết nối bị loại vì trùng (protocol.md mục 3.2) không phát sự kiện nào.
 
 ### 2.4 Người 3 — `file_transfer.py`, `chat_state.py`, `cli.py`, `main.py`
 
@@ -95,7 +109,8 @@ class Transport:
 # file_transfer.py
 def send_file(sock, path: str, peer_id: str, events: queue.Queue) -> None
 def receive_file(sock, peer_id: str, name: str, events: queue.Queue, downloads_dir: str) -> None
-# Cả hai đều chạy trên luồng riêng, tự đóng socket khi xong, không raise ra ngoài: mọi lỗi thành sự kiện ERROR.
+# Cả hai đều chạy trên luồng riêng, tự đóng socket khi xong, không raise ra ngoài.
+# Mọi kết quả được báo bằng sự kiện: FILE_COMPLETED, FILE_UNCONFIRMED (chỉ bên gửi) hoặc ERROR.
 
 # chat_state.py
 class ChatState:
@@ -123,13 +138,15 @@ class Event:
 | `PEER_OFFLINE` | Người 1 | `peer: Peer`, `reason: "timeout" \| "goodbye"` |
 | `CHAT_CONNECTED` | Người 2 | `peer_id`, `name`, `incoming: bool` |
 | `CHAT_RECEIVED` | Người 2 | `peer_id`, `name`, `text` |
-| `CONNECTION_CLOSED` | Người 2 | `peer_id`, `name`, `reason: "local_leave" \| "bye" \| "lost" \| "protocol_error" \| "duplicate"` |
+| `CONNECTION_CLOSED` | Người 2 | `peer_id`, `name`, `reason: "local_leave" \| "bye" \| "lost" \| "protocol_error"` |
 | `FILE_PROGRESS` | Người 3 | `file_id`, `peer_id`, `filename`, `direction: "send" \| "recv"`, `done: int`, `total: int` |
-| `FILE_COMPLETED` | Người 3 | `file_id`, `peer_id`, `filename`, `direction`, `path` (chỉ khi nhận), `verified: bool` |
+| `FILE_COMPLETED` | Người 3 | `file_id`, `peer_id`, `filename`, `direction`, `path` (chỉ khi nhận) |
+| `FILE_UNCONFIRMED` | Người 3 | `file_id`, `peer_id`, `filename` (chỉ bên gửi) |
 | `ERROR` | Tất cả | `source: "udp" \| "tcp" \| "file" \| "cli"`, `message: str`, `file_id` (nếu liên quan) |
 
 - Chỉ `cli.py` đọc hàng đợi `events`. Các module khác chỉ `put()`.
-- `CHAT_CONNECTED` được thêm so với danh sách trong tài liệu phân công, để thông báo khi có người khác mở chat tới mình.
+- `FILE_COMPLETED` chỉ phát khi chắc chắn thành công: bên gửi nhận `FILE_DONE` có hash khớp, bên nhận đã lưu file và gửi `FILE_DONE`. Ba kết quả của bên gửi được liệt kê ở protocol.md mục 4.2.
+- `CHAT_CONNECTED` và `FILE_UNCONFIRMED` được thêm so với danh sách trong tài liệu phân công. `CHAT_CONNECTED` dùng để thông báo khi có người khác mở chat tới mình.
 - Muốn thêm loại sự kiện: thêm vào bảng này trong cùng PR.
 
 ## 3. Quy tắc lập trình
