@@ -1,9 +1,14 @@
-from dataclasses import dataclass,replace
+"""Bản ghi peer bất biến và kho dữ liệu dùng chung giữa các luồng."""
+
+from dataclasses import dataclass, replace
 import threading
 import time
 
+
 @dataclass(frozen=True)
 class Peer:
+    """Thông tin một phiên người dùng được discovery xác nhận."""
+
     peer_id: str
     name: str
     ip: str
@@ -11,77 +16,70 @@ class Peer:
     status: str
     last_seen: float
 
+
 class PeerStore:
-    def __init__(self)->None:
-        """ Khở tạo peer rỗng và khóa bảo  vệ. """
-        self._peers: dict[str,Peer]={}
-        self._lock=threading.Lock()
+    """Lưu peer theo ID và trả các bản sao độc lập cho bên gọi."""
 
-    """ Thêm mới hoặc cập nhật peer, trả về trước và sau """
-    def upsert(self,peer: Peer) ->tuple[Peer | None,Peer]:
+    def __init__(self) -> None:
+        """Khởi tạo kho rỗng và khóa bảo vệ dữ liệu."""
+        self._peers: dict[str, Peer] = {}
+        self._lock = threading.Lock()
+
+    def upsert(self, peer: Peer) -> tuple[Peer | None, Peer]:
+        """Thêm hoặc cập nhật peer, trả bản sao trước và sau."""
+        if not isinstance(peer, Peer):
+            raise TypeError("peer phải là đối tượng Peer")
         with self._lock:
-            old_peer=self._peers.get(peer.peer_id)
-            stored_peer=replace(peer)
-            self._peers[peer.peer_id]=stored_peer
-            old_copy=(
-                replace(old_peer)
-                if old_peer is not None
-                else None
-            )
-            return old_copy,replace(stored_peer)
+            old_peer = self._peers.get(peer.peer_id)
+            stored_peer = replace(peer)
+            self._peers[peer.peer_id] = stored_peer
+            old_copy = replace(old_peer) if old_peer is not None else None
+            return old_copy, replace(stored_peer)
 
-    """ Tìm 1 peer theo ID """
-    def get(self,peer_id:str)->Peer| None:
+    def get(self, peer_id: str) -> Peer | None:
+        """Trả bản sao peer theo ID, hoặc None nếu không có."""
         with self._lock:
-            peer=self._peers.get(peer_id)
+            peer = self._peers.get(peer_id)
+            return replace(peer) if peer is not None else None
 
-            return (
-                replace(peer)
-                if peer is not None
-                else None
-            )
-
-    """ Lấy danh sách đã sắp xếp """
-    def get_peers(self)->list[Peer]:
+    def get_peers(self) -> list[Peer]:
+        """Trả bản sao danh sách sắp theo (name, peer_id)."""
         with self._lock:
-            peers=[replace(peer) for peer in self._peers.values()]
-        return sorted(peers, key=lambda peer : (peer.name,peer.peer_id))
+            peers = [replace(peer) for peer in self._peers.values()]
+        return sorted(peers, key=lambda peer: (peer.name, peer.peer_id))
 
-    """ Tìm theo tên và xử lý trùng tên """
-    def find_by_name(self,name:str)->list[Peer]:
+    def find_by_name(self, name: str) -> list[Peer]:
+        """Trả mọi peer trùng tên chính xác, sắp theo peer_id."""
         with self._lock:
-            peers=[
+            peers = [
                 replace(peer)
                 for peer in self._peers.values()
-                if peer.name==name
+                if peer.name == name
             ]
-        return sorted(peers,key=lambda peer: peer.peer_id)
+        return sorted(peers, key=lambda peer: peer.peer_id)
 
-    """ Xóa peer theo ID """
-    def remove(self,peer_id:str)->Peer | None:
+    def remove(self, peer_id: str) -> Peer | None:
+        """Xóa và trả bản sao peer, hoặc None nếu đã vắng mặt."""
         with self._lock:
-            peer=self._peers.pop(peer_id,None)
-            return (
-                replace(peer)
-                if peer is not None
-                else None
-            )
+            peer = self._peers.pop(peer_id, None)
+            return replace(peer) if peer is not None else None
 
-    """ Xóa peer quá hạn """
-    def remove_expired(self,timeout: float,*,now: float |None=None)->list[Peer]:
-        if (timeout<0):
+    def remove_expired(
+        self, timeout: float, *, now: float | None = None
+    ) -> list[Peer]:
+        """Xóa và trả bản sao các peer đã quá timeout."""
+        if timeout < 0:
             raise ValueError("timeout không được âm")
         if now is None:
-            now=time.monotonic()
+            now = time.monotonic()
         with self._lock:
-            expired_ids=[
+            expired_ids = [
                 peer_id
-                for peer_id,peer in self._peers.items()
-                if now-peer.last_seen > timeout
+                for peer_id, peer in self._peers.items()
+                if now - peer.last_seen > timeout
             ]
             expired = [
                 replace(self._peers.pop(peer_id))
                 for peer_id in expired_ids
             ]
-        return sorted(expired,key=lambda peer:(peer.name,peer.peer_id))
-    
+        return sorted(expired, key=lambda peer: (peer.name, peer.peer_id))
