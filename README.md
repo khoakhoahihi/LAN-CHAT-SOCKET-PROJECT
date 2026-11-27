@@ -40,6 +40,20 @@ python main.py --name Quan
 | `--udp-port` | `9999` | Cổng UDP cho discovery. Mọi peer phải dùng chung cổng này |
 | `--broadcast` | `255.255.255.255` | Địa chỉ broadcast. Dùng `127.255.255.255` khi chạy trên một máy không có mạng |
 | `--downloads` | `downloads` | Thư mục lưu file nhận được |
+| `--gui` | tắt | Mở cửa sổ đồ hoạ (tkinter) thay cho giao diện console |
+
+### Giao diện cửa sổ
+
+Thêm `--gui` để dùng cửa sổ thay cho console. Lõi chương trình giữ nguyên, các lệnh `/list`, `/chat`, `/send`... vẫn gõ được trong ô nhập.
+
+```bash
+python main.py --name Quan --gui
+```
+
+- Cột trái liệt kê người đang online: avatar màu, chấm trạng thái (xanh là online, cam là away), huy hiệu đỏ là số tin chưa đọc. Bấm vào một người để mở chat; người đang chat được tô nền và hiện tên ở thanh tiêu đề.
+- Tin của mình là bong bóng xanh bên phải, tin của bạn là bong bóng xám bên trái, có giờ gửi. Thông báo hệ thống hiện ở giữa, lỗi màu đỏ.
+- Gửi file có thanh tiến độ phía trên ô nhập. Nút *+ File* mở hộp chọn file, nút *Status* đổi `online`/`away`, nút *Dark mode* đổi giao diện sáng hoặc tối.
+- Cần `tkinter`, đã có sẵn trong Python trên Windows và macOS. Trên Ubuntu cài thêm: `sudo apt install python3-tk`.
 
 ### Trên nhiều máy
 
@@ -104,6 +118,8 @@ File nhận được nằm trong `downloads/`. Nếu trùng tên, file mới đ�
 lanchat/
 ├── main.py            # điểm khởi động: đọc tham số, bật và tắt các module   (Người 3)
 ├── cli.py             # dòng nhập, phân tích lệnh, hiển thị                (Người 3)
+├── terminal.py        # đọc phím, vẽ lại dòng nhập khi có tin đến          (Người 3)
+├── gui.py             # cửa sổ tkinter, dùng chung lõi lệnh với cli.py     (Người 3)
 ├── chat_state.py      # người đang chat, lịch sử, số tin chưa đọc            (Người 3)
 ├── file_transfer.py   # gửi và nhận file, tiến độ, downloads/              (Người 3)
 ├── discovery.py       # UDP broadcaster, listener, kiểm tra timeout          (Người 1)

@@ -37,13 +37,6 @@ GOODBYE_REPEAT = 2            # lần
 GOODBYE_GAP = 0.1             # giây
 PROGRESS_STEP = 1             # phần trăm
 MAX_NAME_LEN = 20             # ký tự
-MAX_FILENAME_BYTES = 255      # byte UTF-8, tên file nhận (Người 3)
-NO_FILE_ID = "00000000"       # file_id giả khi lỗi xảy ra trước khi đọc FILE_META (Người 3)
-QUEUE_POLL = 0.2              # giây, cli chờ sự kiện (Người 3)
-KEY_POLL = 0.05               # giây, cli chờ phím (Người 3)
-PUMP_JOIN_TIMEOUT = 0.5       # giây, cli chờ luồng sự kiện khi thoát (Người 3)
-DEFAULT_BROADCAST = "255.255.255.255"  # địa chỉ broadcast mặc định (Người 3)
-MAX_PORT = 65535              # cổng lớn nhất (Người 3)
 
 # Tập giá trị hợp lệ (protocol.md mục 1.1 và 2.4)
 VALID_STATUSES = frozenset({"online", "away"})

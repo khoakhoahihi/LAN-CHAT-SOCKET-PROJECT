@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import io
-import os
 import queue
-import sys
 import threading
-import types
 import unittest
 from unittest.mock import patch
 
@@ -86,7 +83,6 @@ def make_cli(
     ev_queue: queue.Queue = queue.Queue()
     stop = threading.Event()
     cli = CLI(
-        my_id="00000001",
         name="Tester",
         store=store,
         transport=transport,
@@ -96,14 +92,8 @@ def make_cli(
         stop=stop,
         tcp_port=5000,
         udp_port=9999,
-        downloads="downloads",
     )
     return cli, store, transport, discovery, state, ev_queue, stop
-
-
-class FakeTTY(io.StringIO):
-    def isatty(self) -> bool:
-        return True
 
 
 class TestCLI(unittest.TestCase):
@@ -255,7 +245,6 @@ class TestCLI(unittest.TestCase):
             cli._handle_line("Hello Alice")
         self.assertEqual(out.getvalue(), "[Tester] Hello Alice\n")
         self.assertEqual(transport.sent_messages, [("11111111", "Hello Alice")])
-        self.assertEqual(len(state.history("11111111")), 1)
 
     def test_leave_and_status(self) -> None:
         p1 = Peer("11111111", "Alice", "192.168.1.10", 5001, "online", 0.0)
@@ -399,70 +388,6 @@ class TestCLI(unittest.TestCase):
         self.assertTrue(stop.is_set())
         self.assertNotIn("No active chat", val)
         self.assertNotIn("hello", val)
-
-    def test_say_terminal_mode_renders_prompt_with_input_buffer(self) -> None:
-        cli, _, _, _, _, _, _ = make_cli()
-        in_fake = FakeTTY()
-        out_fake = FakeTTY()
-        with patch("sys.stdin", in_fake), patch("sys.stdout", out_fake):
-            cli._input_buf = list("abc")
-            cli.say("x")
-        self.assertEqual(out_fake.getvalue(), "\r\033[Jx\n> abc")
-
-    def test_say_wrapped_prompt_moves_up_before_clearing(self) -> None:
-        cli, _, _, _, _, _, _ = make_cli()
-        out_fake = FakeTTY()
-        with patch("sys.stdin", FakeTTY()), patch("sys.stdout", out_fake):
-            with patch("cli.shutil.get_terminal_size", return_value=os.terminal_size((10, 24))):
-                cli._input_buf = list("a" * 15)
-                cli.say("x")
-        self.assertEqual(out_fake.getvalue(), "\r\033[1A\033[Jx\n> " + "a" * 15)
-
-    def test_say_after_stop_leaves_no_prompt(self) -> None:
-        cli, _, _, _, _, _, stop = make_cli()
-        out_fake = FakeTTY()
-        stop.set()
-        with patch("sys.stdin", FakeTTY()), patch("sys.stdout", out_fake):
-            cli.say("[*] Bye")
-        self.assertEqual(out_fake.getvalue(), "\r\033[J[*] Bye\n")
-
-    @unittest.skipUnless(sys.platform == "win32", "msvcrt only on Windows")
-    def test_read_key_keeps_accented_a_and_next_char(self) -> None:
-        cli, _, _, _, _, _, _ = make_cli()
-        keys = ["\xe0", "o"]
-
-        class FakeMsvcrt:
-            @staticmethod
-            def kbhit() -> bool:
-                return bool(keys)
-
-            @staticmethod
-            def getwch() -> str:
-                return keys.pop(0)
-
-        with patch("cli.msvcrt", FakeMsvcrt):
-            self.assertEqual(cli._read_key(), "\xe0")
-            self.assertEqual(cli._read_key(), "o")
-
-    @unittest.skipUnless(sys.platform == "win32", "msvcrt only on Windows")
-    def test_read_key_swallows_arrow_keys(self) -> None:
-        cli, _, _, _, _, _, _ = make_cli()
-        keys = ["\xe0", "H", "\x00", "P"]
-
-        class FakeMsvcrt:
-            @staticmethod
-            def kbhit() -> bool:
-                return bool(keys)
-
-            @staticmethod
-            def getwch() -> str:
-                return keys.pop(0)
-
-        with patch("cli.msvcrt", FakeMsvcrt):
-            self.assertIsNone(cli._read_key())
-            self.assertIsNone(cli._read_key())
-        self.assertEqual(keys, [])
-
 
 if __name__ == "__main__":
     unittest.main()

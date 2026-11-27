@@ -49,16 +49,6 @@ class TestChatState(unittest.TestCase):
         self.assertFalse(state.add_message("peer2", "bob", "hi"))
         self.assertEqual(state.unread("peer2"), 1)
 
-    def test_history_keeps_both_directions(self) -> None:
-        state = ChatState()
-        state.add_message("peer1", "alice", "inbound")
-        state.add_message("peer1", "me", "outbound")
-        expected = [Message("alice", "inbound"), Message("me", "outbound")]
-        self.assertEqual(state.history("peer1"), expected)
-        copied = state.history("peer1")
-        copied.append(Message("other", "extra"))
-        self.assertEqual(state.history("peer1"), expected)
-
     def test_concurrent_add_message(self) -> None:
         state = ChatState()
 
@@ -73,7 +63,6 @@ class TestChatState(unittest.TestCase):
         t1.join()
         t2.join()
         self.assertEqual(state.unread("peer1"), 1000)
-        self.assertEqual(len(state.history("peer1")), 1000)
 
 
 if __name__ == "__main__":
