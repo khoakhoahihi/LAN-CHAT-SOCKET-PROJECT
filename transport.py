@@ -163,15 +163,13 @@ class Transport:
             _shutdown_close(listener)
 
         for conn in conns:
-            if conn.state == _OPEN and conn.send_lock.acquire(blocking=False):
+            state = self._detach(conn, None)   # đang thoát: không phát sự kiện
+            if state is None:
+                continue
+            if state == _OPEN:
                 # Không chờ khóa: nếu một luồng đang kẹt trong sendall thì bỏ qua BYE.
-                try:
-                    send_frame(conn.sock, "BYE", b"")
-                except OSError:
-                    pass
-                finally:
-                    conn.send_lock.release()
-            self._close(conn, None)   # đang thoát: không phát sự kiện
+                self._send_bye(conn, wait_lock=False)
+            _shutdown_close(conn.sock)
 
         if self._acceptor is not None and self._acceptor is not threading.current_thread():
             self._acceptor.join(CONNECT_TIMEOUT)
@@ -205,10 +203,10 @@ class Transport:
             self._chats[pid] = conn
 
         try:
-            sock = socket.create_connection((peer.ip, peer.tcp_port), timeout=CONNECT_TIMEOUT)
-        except OSError as exc:
+            sock = self._dial(peer)
+        except ConnectError:
             self._close(conn, None)
-            raise ConnectError(f"Không kết nối được tới {_describe(peer)}: {exc}") from None
+            raise
 
         with self._cond:
             if conn.closed:          # stop() chạy trong lúc đang connect()
@@ -216,41 +214,15 @@ class Transport:
                 raise ConnectError("Chương trình đang thoát")
             conn.sock = sock
 
-        duplicate = False
         try:
-            sock.settimeout(INTRO_TIMEOUT)
-            with conn.send_lock:
-                send_frame(sock, "INTRO", make_intro("CHAT", self._my_id, self._name))
-            ftype, payload = recv_frame(sock)
-            if ftype == "INTRO_OK":
-                rid, rname = parse_intro_ok(payload)
-                if rid != pid:
-                    raise ConnectError(
-                        f"{peer.ip}:{peer.tcp_port} không còn là {peer.name} "
-                        f"(đang là {rname}, id {rid})")
-                conn.name = rname
-                sock.settimeout(None)
-            elif ftype == "INTRO_ERR":
-                code, message = parse_intro_err(payload)
-                if code != "DUPLICATE":
-                    raise ConnectError(f"{_describe(peer)} từ chối kết nối: {message or code}")
-                duplicate = True
-            else:
-                raise ProtocolError(f"nhận {ftype} thay vì INTRO_OK")
+            # Không cần send_lock: ô còn ở trạng thái "connecting" nên send_chat,
+            # disconnect_chat, stop đều chưa ghi lên socket này.
+            result = self._handshake_out(sock, peer, "CHAT")
         except ConnectError:
             self._close(conn, None)
             raise
-        except ProtocolError as exc:
-            self._close(conn, None)
-            raise ConnectError(f"{_describe(peer)} trả lời sai giao thức: {exc}") from None
-        except TimeoutError:
-            self._close(conn, None)
-            raise ConnectError(f"{_describe(peer)} không trả lời (hết thời gian chờ)") from None
-        except OSError as exc:
-            self._close(conn, None)
-            raise ConnectError(f"Mất kết nối với {_describe(peer)} khi bắt tay: {exc}") from None
 
-        if duplicate:
+        if result is None:
             # Bên kia đang giữ một kết nối chat khác với mình: dùng kết nối đó (protocol.md 3.2).
             self._close(conn, None)
             with self._cond:
@@ -259,6 +231,7 @@ class Transport:
                 raise ConnectError(f"{_describe(peer)} báo trùng kết nối nhưng không có kết nối nào")
             return
 
+        conn.name = result   # tên thật lấy từ INTRO_OK
         if not self._open(conn):
             raise ConnectError("Chương trình đang thoát")
         self._start_reader(conn)
@@ -279,14 +252,10 @@ class Transport:
     def disconnect_chat(self, peer_id: str) -> None:
         """Gửi BYE rồi đóng kết nối chat; không có kết nối thì bỏ qua."""
         conn = self._get_open(peer_id)
-        if conn is None:
+        if conn is None or self._detach(conn, CLOSE_LOCAL_LEAVE) is None:
             return
-        with conn.send_lock:
-            try:
-                send_frame(conn.sock, "BYE", b"")
-            except OSError:
-                pass
-        self._close(conn, CLOSE_LOCAL_LEAVE)
+        self._send_bye(conn, wait_lock=True)
+        _shutdown_close(conn.sock)
 
     def is_connected(self, peer_id: str) -> bool:
         """Có kết nối chat đang mở với peer_id hay không."""
@@ -294,8 +263,61 @@ class Transport:
             return self._is_open_locked(peer_id)
 
     def open_file_connection(self, peer) -> socket.socket:
-        """Mở kết nối FILE đã bắt tay xong và trả socket cho người gọi (PR C2)."""
-        raise NotImplementedError("open_file_connection sẽ có ở PR C2")
+        """Mở kết nối FILE, bắt tay xong thì trả socket (blocking) cho người gọi; lỗi thì ConnectError."""
+        if peer.peer_id == self._my_id:
+            raise ConnectError("Không thể gửi file cho chính mình")
+        if self._stopping.is_set():
+            raise ConnectError("Chương trình đang thoát")
+        sock = self._dial(peer)
+        try:
+            if self._handshake_out(sock, peer, "FILE") is None:
+                # DUPLICATE chỉ dành cho kết nối chat; trên kết nối file là trả lời sai.
+                raise ConnectError(f"{_describe(peer)} trả lời sai giao thức: DUPLICATE cho kết nối file")
+        except ConnectError:
+            _shutdown_close(sock)
+            raise
+        # Từ đây socket thuộc về người gọi; Transport không đọc, ghi hay đóng nó nữa.
+        return sock
+
+    # ------------------------------------------------------------------ bắt tay đi ra
+
+    def _dial(self, peer) -> socket.socket:
+        """connect() tới peer với CONNECT_TIMEOUT; lỗi thì ConnectError."""
+        try:
+            return socket.create_connection((peer.ip, peer.tcp_port), timeout=CONNECT_TIMEOUT)
+        except OSError as exc:
+            raise ConnectError(f"Không kết nối được tới {_describe(peer)}: {exc}") from None
+
+    def _handshake_out(self, sock: socket.socket, peer, kind: str) -> str | None:
+        """Gửi INTRO, chờ INTRO_OK; trả tên của bên kia, hoặc None nếu nhận DUPLICATE.
+
+        Thành công thì socket đã về chế độ blocking (settimeout(None)).
+        Mọi lỗi khác đều thành ConnectError; người gọi tự đóng socket.
+        """
+        try:
+            sock.settimeout(INTRO_TIMEOUT)
+            send_frame(sock, "INTRO", make_intro(kind, self._my_id, self._name))
+            ftype, payload = recv_frame(sock)
+            if ftype == "INTRO_OK":
+                rid, rname = parse_intro_ok(payload)
+                if rid != peer.peer_id:
+                    raise ConnectError(
+                        f"{peer.ip}:{peer.tcp_port} không còn là {peer.name} "
+                        f"(đang là {rname}, id {rid})")
+                sock.settimeout(None)
+                return rname
+            if ftype == "INTRO_ERR":
+                code, message = parse_intro_err(payload)
+                if code == "DUPLICATE":
+                    return None
+                raise ConnectError(f"{_describe(peer)} từ chối kết nối: {message or code}")
+            raise ProtocolError(f"nhận {ftype} thay vì INTRO_OK")
+        except ProtocolError as exc:
+            raise ConnectError(f"{_describe(peer)} trả lời sai giao thức: {exc}") from None
+        except TimeoutError:
+            raise ConnectError(f"{_describe(peer)} không trả lời (hết thời gian chờ)") from None
+        except OSError as exc:   # gồm ConnectionClosed
+            raise ConnectError(f"Mất kết nối với {_describe(peer)} khi bắt tay: {exc}") from None
 
     # ------------------------------------------------------------------ luồng accept
 
@@ -339,9 +361,30 @@ class Transport:
             self._reject(sock, "SHUTTING_DOWN", "bên nhận đang thoát")
             return
         if kind == "FILE":
-            self._reject(sock, "BAD_INTRO", "chưa hỗ trợ kết nối file")   # PR C2
+            self._accept_file(sock, pid, pname)
+        else:
+            self._accept_chat(sock, pid, pname)
+
+    def _accept_file(self, sock: socket.socket, pid: str, pname: str) -> None:
+        """Trả INTRO_OK rồi bàn giao socket cho on_file_connection trên luồng hiện tại.
+
+        Luồng hiện tại là luồng bắt tay riêng của kết nối này, không phải luồng
+        accept, nên callback có chạy lâu cũng không chặn kết nối khác.
+        """
+        try:
+            send_frame(sock, "INTRO_OK", make_intro_ok(self._my_id, self._name))
+            sock.settimeout(None)
+        except OSError as exc:
+            log.info("gửi INTRO_OK (FILE) cho %s thất bại: %s", pid, exc)
+            _shutdown_close(sock)
             return
-        self._accept_chat(sock, pid, pname)
+        # Từ đây socket thuộc về Người 3; Transport không đọc, ghi hay đóng nó nữa.
+        try:
+            self._on_file_connection(sock, pid, pname)
+        except Exception as exc:   # file_transfer hứa không raise; nếu có thì báo, không làm sập luồng
+            log.exception("on_file_connection ném exception")
+            self._emit(ERROR, source=SOURCE_TCP,
+                       message=f"Lỗi xử lý kết nối file từ {pname}: {exc}")
 
     def _accept_chat(self, sock: socket.socket, pid: str, pname: str) -> None:
         conn = _ChatConn(sock, pid, pname, incoming=True, initiator=pid, state=_ACCEPTING)
@@ -433,20 +476,44 @@ class Transport:
             return False
         return True
 
-    def _close(self, conn: _ChatConn, reason: str | None) -> bool:
-        """Đóng kết nối đúng một lần; phát CONNECTION_CLOSED nếu reason khác None và ô đã open."""
+    def _detach(self, conn: _ChatConn, reason: str | None) -> str | None:
+        """Gỡ kết nối khỏi bảng đúng một lần và phát CONNECTION_CLOSED nếu cần.
+
+        Trả trạng thái của ô trước khi gỡ, hoặc None nếu nơi khác đã gỡ rồi.
+        Không đụng socket: người gọi tự gửi BYE (nếu cần) rồi đóng. Gỡ TRƯỚC khi
+        gửi BYE để luồng đọc, khi thấy bên kia đóng theo, không phát nhầm "lost".
+        """
         with self._cond:
             if conn.closed:
-                return False
+                return None
             conn.closed = True
             if self._chats.get(conn.peer_id) is conn:
                 del self._chats[conn.peer_id]
-            if reason is not None and conn.state == _OPEN:
+            # Đang stop(): không phát sự kiện nào (CLI đang thoát).
+            if reason is not None and conn.state == _OPEN and not self._stopping.is_set():
                 self._emit(CONNECTION_CLOSED, peer_id=conn.peer_id, name=conn.name,
                            reason=reason)
             self._cond.notify_all()
+            return conn.state
+
+    def _close(self, conn: _ChatConn, reason: str | None) -> bool:
+        """Gỡ kết nối (xem _detach) rồi đóng socket; False nếu đã đóng trước đó."""
+        if self._detach(conn, reason) is None:
+            return False
         _shutdown_close(conn.sock)
         return True
+
+    @staticmethod
+    def _send_bye(conn: _ChatConn, wait_lock: bool) -> None:
+        """Gửi BYE qua send_lock, bỏ qua lỗi; wait_lock=False thì bỏ qua nếu khóa đang bận."""
+        if not conn.send_lock.acquire(blocking=wait_lock):
+            return
+        try:
+            send_frame(conn.sock, "BYE", b"")
+        except OSError:
+            pass
+        finally:
+            conn.send_lock.release()
 
     def _emit(self, etype: str, **data) -> None:
         self._events.put(Event(etype, data))

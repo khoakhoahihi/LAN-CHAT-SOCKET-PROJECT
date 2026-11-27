@@ -1,7 +1,8 @@
-"""Test cho transport.py (PR C1). Chạy: python -m unittest tests.test_transport -v"""
+"""Test cho transport.py (PR C1–C2). Chạy: python -m unittest tests.test_transport -v"""
 
 from __future__ import annotations
 
+import hashlib
 import queue
 import socket
 import struct
@@ -143,9 +144,9 @@ class RawServer:
 class TransportTest(unittest.TestCase):
     """Tạo các Transport trên 127.0.0.1 với cổng do hệ điều hành chọn."""
 
-    def make(self, peer_id: str, name: str, start: bool = True):
+    def make(self, peer_id: str, name: str, start: bool = True, on_file=None):
         q = queue.Queue()
-        t = Transport(peer_id, name, 0, q, on_file_connection=lambda *a: None)
+        t = Transport(peer_id, name, 0, q, on_file_connection=on_file or (lambda *a: None))
         if start:
             t.start()
         self.addCleanup(t.stop)
@@ -345,11 +346,6 @@ class TestIncoming(TransportTest):
                 self.assertTrue(c.is_closed_by_peer())
         self.assertNotIn(ev.CHAT_CONNECTED, types(drain(self.q)))
 
-    def test_file_intro_not_supported_yet(self):
-        c = self.raw()
-        ftype, payload = c.handshake(kind="FILE")
-        self.assertEqual(ftype, "INTRO_ERR")
-
     def test_intro_timeout_does_not_block_accept(self):  # 11
         with mock.patch.object(transport, "INTRO_TIMEOUT", 0.3):
             silent = self.raw()
@@ -508,6 +504,214 @@ class TestStop(TransportTest):
             c = RawClient(port)
             c.handshake()
             c.close()
+
+
+# --- #16–19: kết nối file (PR C2) -------------------------------------------
+class FileReceiver:
+    """on_file_connection giả: ghi lại lời gọi, nhận `size` byte, trả FILE_DONE kèm SHA-256."""
+
+    def __init__(self, size: int, gate: threading.Event | None = None):
+        self.size = size
+        self.gate = gate             # nếu có: chờ gate rồi mới đọc (giả lập ghi đĩa chậm)
+        self.calls = []              # (peer_id, name, tên luồng, timeout của socket)
+        self.done = threading.Event()
+        self.error = None
+
+    def __call__(self, sock, peer_id, name):
+        self.calls.append((peer_id, name, threading.current_thread().name, sock.gettimeout()))
+        try:
+            if self.gate is not None:
+                self.gate.wait(WAIT)
+            data = p.recv_exact(sock, self.size)
+            p.send_frame(sock, "FILE_DONE",
+                         f"3fa9c2d1|{hashlib.sha256(data).hexdigest()}".encode())
+        except Exception as exc:     # báo lỗi về luồng test
+            self.error = exc
+        finally:
+            sock.close()
+            self.done.set()
+
+
+class TestFile(TransportTest):
+    def send_blob(self, sock, wire: bytes, data: bytes | None = None):
+        """Gửi `wire`, chờ FILE_DONE và so SHA-256 với `data` (mặc định = wire)."""
+        sock.sendall(wire)
+        ftype, payload = p.recv_frame(sock)
+        self.assertEqual(ftype, "FILE_DONE")
+        expected = wire if data is None else data
+        self.assertEqual(payload.decode().split("|")[1], hashlib.sha256(expected).hexdigest())
+
+    def test_handoff(self):  # 16
+        data = bytes(range(256)) * 4096      # 1 MiB
+        recv = FileReceiver(len(data))
+        a, qa = self.make("aaaaaaaa", "An")
+        b, qb = self.make("bbbbbbbb", "Bình", on_file=recv)
+        sock = a.open_file_connection(self.peer(b, "bbbbbbbb", "Bình"))
+        self.addCleanup(sock.close)
+        self.assertIsNone(sock.gettimeout())
+        self.send_blob(sock, data)
+        self.assertTrue(recv.done.wait(WAIT))
+        self.assertIsNone(recv.error)
+        self.assertEqual(len(recv.calls), 1)
+        peer_id, name, thread_name, timeout = recv.calls[0]
+        self.assertEqual((peer_id, name), ("aaaaaaaa", "An"))
+        self.assertFalse(thread_name.startswith("tcp-accept"))
+        self.assertIsNone(timeout)
+        # Kết nối file không phải kết nối chat
+        self.assertFalse(a.is_connected("bbbbbbbb"))
+        self.assertFalse(b.is_connected("aaaaaaaa"))
+        self.assertEqual(types(drain(qa) + drain(qb)), [])
+
+    def test_empty_file_and_parallel(self):  # 16
+        """3 kết nối file song song (0 B, 10 B, 100 KB); mỗi luồng gửi 8 byte độ dài trước."""
+        results = []
+        lock = threading.Lock()
+
+        def sized_receiver(sock, pid, name):
+            try:
+                size = int.from_bytes(p.recv_exact(sock, 8), "big")
+                data = p.recv_exact(sock, size)
+                p.send_frame(sock, "FILE_DONE",
+                             f"3fa9c2d1|{hashlib.sha256(data).hexdigest()}".encode())
+                with lock:
+                    results.append(size)
+            finally:
+                sock.close()
+
+        a, _ = self.make("aaaaaaaa", "An")
+        b, _ = self.make("bbbbbbbb", "Bình", on_file=sized_receiver)
+        peer = self.peer(b, "bbbbbbbb", "Bình")
+        blobs = [b"", b"0123456789", bytes(range(256)) * 390]
+        socks = [a.open_file_connection(peer) for _ in blobs]
+        for s in socks:
+            self.addCleanup(s.close)
+        threads = [threading.Thread(target=self.send_blob,
+                                    args=(s, len(blob).to_bytes(8, "big") + blob, blob))
+                   for s, blob in zip(socks, blobs)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(WAIT)
+        self.assertEqual(sorted(results), sorted(len(b) for b in blobs))
+
+    def test_chat_not_blocked_by_file(self):  # 17
+        gate = threading.Event()
+        data = b"x" * 3_000_000
+        recv = FileReceiver(len(data), gate=gate)
+        a, qa = self.make("aaaaaaaa", "An")
+        b, qb = self.make("bbbbbbbb", "Bình", on_file=recv)
+        peer_b = self.peer(b, "bbbbbbbb", "Bình")
+        fsock = a.open_file_connection(peer_b)
+        self.addCleanup(fsock.close)
+        sender = threading.Thread(target=self.send_blob, args=(fsock, data), daemon=True)
+        sender.start()                       # bị kẹt vì bên nhận chưa đọc (gate đóng)
+        a.connect_chat(peer_b)
+        wait_event(qb, ev.CHAT_CONNECTED)
+        for i in range(20):
+            a.send_chat("bbbbbbbb", f"tin {i} trong lúc gửi file")
+            b.send_chat("aaaaaaaa", f"trả lời {i}")
+        self.assertEqual([wait_event(qb, ev.CHAT_RECEIVED).data["text"] for _ in range(20)],
+                         [f"tin {i} trong lúc gửi file" for i in range(20)])
+        self.assertEqual(len([wait_event(qa, ev.CHAT_RECEIVED) for _ in range(20)]), 20)
+        self.assertFalse(recv.done.is_set())   # file vẫn đang dở
+        gate.set()
+        sender.join(WAIT * 2)
+        self.assertTrue(recv.done.wait(WAIT))
+        self.assertIsNone(recv.error)
+        self.assertTrue(a.is_connected("bbbbbbbb"))
+
+    def test_open_errors(self):  # 18
+        a, _ = self.make("aaaaaaaa", "An")
+
+        def server(behavior):
+            srv = RawServer(behavior)
+            self.addCleanup(srv.close)
+            return FakePeer("bbbbbbbb", "Bình", "127.0.0.1", srv.port), srv
+
+        def reply(ftype, payload):
+            def behavior(s):
+                kind = p.parse_intro(p.recv_frame(s)[1])[0]
+                self.assertEqual(kind, "FILE")
+                p.send_frame(s, ftype, payload)
+                time.sleep(0.5)
+            return behavior
+
+        cases = [
+            reply("INTRO_ERR", p.make_intro_err("SHUTTING_DOWN", "đang thoát")),
+            reply("INTRO_OK", p.make_intro_ok("cccccccc", "Chi")),
+            reply("INTRO_ERR", p.make_intro_err("DUPLICATE", "x")),
+            reply("MSG", b"hi"),
+        ]
+        for i, behavior in enumerate(cases):
+            with self.subTest(case=i):
+                peer, srv = server(behavior)
+                with self.assertRaises(ConnectError):
+                    a.open_file_connection(peer)
+                # Transport đã đóng socket của nó: phía server đọc thấy EOF.
+                self.assertTrue(wait_until(lambda: srv.conns))
+                srv.conns[0].settimeout(WAIT)
+                self.assertEqual(srv.conns[0].recv(1), b"")
+        with self.assertRaises(ConnectError):
+            a.open_file_connection(FakePeer("bbbbbbbb", "Bình", "127.0.0.1", closed_port()))
+        with self.assertRaises(ConnectError):
+            a.open_file_connection(self.peer(a, "aaaaaaaa", "An"))
+        with mock.patch.object(transport, "INTRO_TIMEOUT", 0.3):
+            stop = threading.Event()
+            self.addCleanup(stop.set)
+            peer, _ = server(lambda s: stop.wait(5))
+            with self.assertRaises(ConnectError):
+                a.open_file_connection(peer)
+
+    def test_stop_does_not_touch_handed_over_sockets(self):  # 19
+        gate = threading.Event()
+        data = b"y" * 200_000
+        recv = FileReceiver(len(data), gate=gate)
+        a, _ = self.make("aaaaaaaa", "An")
+        b, _ = self.make("bbbbbbbb", "Bình", on_file=recv)
+        fsock = a.open_file_connection(self.peer(b, "bbbbbbbb", "Bình"))
+        self.addCleanup(fsock.close)
+        self.assertTrue(wait_until(lambda: recv.calls))
+        a.stop()
+        b.stop()
+        gate.set()
+        self.send_blob(fsock, data)          # vẫn gửi/nhận được sau khi cả hai stop
+        self.assertTrue(recv.done.wait(WAIT))
+        self.assertIsNone(recv.error)
+
+    def test_open_after_stop(self):
+        a, _ = self.make("aaaaaaaa", "An")
+        b, _ = self.make("bbbbbbbb", "Bình")
+        peer = self.peer(b, "bbbbbbbb", "Bình")
+        a.stop()
+        with self.assertRaises(ConnectError):
+            a.open_file_connection(peer)
+
+    def test_callback_exception_reported(self):
+        def boom(sock, pid, name):
+            sock.close()
+            raise RuntimeError("lỗi giả")
+
+        a, _ = self.make("aaaaaaaa", "An")
+        b, qb = self.make("bbbbbbbb", "Bình", on_file=boom)
+        with self.assertLogs("transport", level="ERROR"):
+            sock = a.open_file_connection(self.peer(b, "bbbbbbbb", "Bình"))
+            self.addCleanup(sock.close)
+            e = wait_event(qb, ev.ERROR)
+        self.assertEqual(e.data["source"], ev.SOURCE_TCP)
+        self.assertIn("lỗi giả", e.data["message"])
+        # Transport vẫn chạy bình thường sau đó
+        a.connect_chat(self.peer(b, "bbbbbbbb", "Bình"))
+        wait_event(qb, ev.CHAT_CONNECTED)
+
+    def test_raw_file_intro(self):
+        recv = FileReceiver(5)
+        b, _ = self.make("bbbbbbbb", "Bình", on_file=recv)
+        c = RawClient(b.port)
+        self.addCleanup(c.close)
+        self.assertEqual(c.handshake("11111111", "Raw", kind="FILE"), ("INTRO_OK", "bbbbbbbb|Bình".encode()))
+        c.send_raw(b"hello")
+        self.assertEqual(c.recv()[0], "FILE_DONE")
+        self.assertEqual(recv.calls[0][:2], ("11111111", "Raw"))
 
 
 if __name__ == "__main__":
