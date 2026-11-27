@@ -16,23 +16,16 @@ Chi tiết định dạng thông điệp nằm trong [`docs/protocol.md`](docs/p
 
 - Python 3.10 trở lên.
 - Các máy chạy chung một mạng LAN hoặc Wi-Fi. Cũng có thể chạy nhiều instance trên một máy.
-- Thư viện: chỉ dùng thư viện chuẩn.
-  > Nếu nhóm chọn `prompt_toolkit` cho giao diện (phương án a ở mục 4.3 của đề), cài thêm bằng `pip install -r requirements.txt` và cập nhật dòng này.
+- Thư viện: chỉ dùng thư viện chuẩn của Python, không cần `pip install` gì thêm.
 
 ## Cài đặt
 
 ```bash
-git clone <url-repo>
-cd lanchat
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-pip install -r requirements.txt   # chỉ cần khi có requirements.txt
+git clone https://github.com/khoakhoahihi/LAN-CHAT-SOCKET-PROJECT.git
+cd LAN-CHAT-SOCKET-PROJECT
 ```
 
-**Windows:** lần đầu chạy, khi Windows Firewall hỏi, chọn **Allow** cho Python ở cả mạng Private lẫn Public. Nếu không, chương trình sẽ không nhận được gói broadcast.
+**Windows:** nên chạy trong Windows Terminal hoặc PowerShell (hỗ trợ ANSI). Lần đầu chạy, khi Windows Firewall hỏi, chọn **Allow** cho Python ở cả mạng Private lẫn Public. Nếu không, chương trình sẽ không nhận được gói broadcast.
 
 ## Chạy
 
@@ -118,7 +111,7 @@ lanchat/
 ├── protocol.py        # hằng số, send_frame, recv_frame, recv_exact          (Người 2)
 ├── transport.py       # TCP listener, kết nối chat, phân loại kết nối file   (Người 2)
 ├── events.py          # định nghĩa sự kiện dùng chung                         (cả nhóm)
-├── tests/             # test cho từng module
+├── tests/             # test cho từng module; e2e.py chạy 3 instance thật
 ├── docs/
 │   ├── protocol.md    # đặc tả giao thức
 │   └── report/        # báo cáo, ảnh Wireshark
@@ -139,6 +132,14 @@ Kiến trúc tóm tắt:
 python -m unittest discover tests
 ```
 
+### Test end-to-end
+
+Tự mở 3 instance (Quan, Minh, Huy) trên một máy rồi chạy kịch bản: thấy nhau, chat, tin chưa đọc, đổi người chat, đổi trạng thái, gửi file kiểm SHA-256, tắt đột ngột một peer, thoát. In `PASS` hoặc `FAIL` cho từng bước.
+
+```bash
+python tests/e2e.py
+```
+
 ### Kiểm tra nhanh bằng netcat
 
 ```bash
@@ -151,7 +152,7 @@ printf 'INTRO|18|CHAT|a1b2c3d4|Quan' | nc 127.0.0.1 5001
 
 ### Kiểm thử tích hợp
 
-Chạy hết danh sách kiểm thử tích hợp trong tài liệu phân công trước mỗi lần merge mốc và trước buổi demo. Tối thiểu phải kiểm tra:
+`tests/e2e.py` đã phủ phần lớn danh sách dưới đây trên một máy. Các mục cần hai máy thật thì kiểm tay trước buổi demo:
 
 - [ ] Hai máy tự thấy nhau; tắt một máy thì máy kia báo offline sau khoảng 10 giây.
 - [ ] Chat hai chiều, tin tiếng Việt và nhiều tin liên tiếp hiển thị đúng.
