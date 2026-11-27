@@ -291,6 +291,10 @@ sequenceDiagram
 | `DEFAULT_TCP_PORT` | 5000 |
 | `HELLO_INTERVAL` | 3 s |
 | `PEER_TIMEOUT` | 10 s |
+| `CLEANUP_INTERVAL` | 1 s, chu kỳ quét peer hết hạn |
+| `UDP_RECV_TIMEOUT` | 0,5 s, thời gian chờ mỗi lần nhận UDP |
+| `UDP_RETRY_INTERVAL` | 0,1 s, khoảng chờ khi nhận UDP gặp lỗi tạm thời |
+| `UDP_RECV_BUFSIZE` | 65 535 byte, bộ đệm nhận trước khi kiểm tra giới hạn datagram |
 | `MAX_DATAGRAM` | 512 byte |
 | `MAX_HEADER` | 32 byte |
 | `MAX_FRAME_PAYLOAD` | 65 536 byte |
@@ -305,6 +309,12 @@ sequenceDiagram
 | `GOODBYE_GAP` | 0,1 s |
 | `PROGRESS_STEP` | 1 % |
 | `MAX_NAME_LEN` | 20 ký tự |
+
+`UDP_RECV_BUFSIZE` khác `MAX_DATAGRAM`: nhận trọn gói trước, sau đó loại
+datagram lớn hơn 512 byte. Trên Windows, bộ đệm quá nhỏ có thể gây
+`WSAEMSGSIZE`, nên không dùng giới hạn chấp nhận làm kích thước bộ đệm.
+`UDP_RETRY_INTERVAL` giúp listener tránh lặp nhanh khi lỗi nhận liên tục;
+khoảng chờ này phải ngắt được bằng tín hiệu dừng.
 
 ## 6. Phiên mẫu ở mức byte
 

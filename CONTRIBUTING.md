@@ -53,6 +53,7 @@ class Discovery:
                  udp_port: int, broadcast_addr: str): ...
     def start(self) -> None     # lỗi bind cổng UDP: raise OSError, main.py báo lỗi rồi thoát
     def set_status(self, status: str) -> None   # status sai: raise ValueError; đúng: gửi HELLO ngay
+        # chưa chạy hoặc đang/đã dừng: chỉ lưu trạng thái hợp lệ, không gửi UDP
     def stop(self) -> None      # gửi GOODBYE, dừng các luồng, đóng socket; gọi nhiều lần không lỗi
 ```
 
