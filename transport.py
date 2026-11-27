@@ -52,7 +52,7 @@ class _ChatConn:
     """Một kết nối chat (hoặc chỗ giữ cho kết nối đang bắt tay)."""
 
     __slots__ = ("sock", "peer_id", "name", "incoming", "initiator",
-                 "state", "closed", "send_lock")
+                 "state", "closed", "superseded", "announce", "send_lock")
 
     def __init__(self, sock: socket.socket | None, peer_id: str, name: str,
                  incoming: bool, initiator: str, state: str) -> None:
@@ -60,9 +60,11 @@ class _ChatConn:
         self.peer_id = peer_id
         self.name = name
         self.incoming = incoming
-        self.initiator = initiator   # peer_id của bên đã connect(); C3 dùng để xử lý trùng
+        self.initiator = initiator   # peer_id của bên đã connect(); dùng để xử lý trùng
         self.state = state
         self.closed = False
+        self.superseded = False      # bị một kết nối khác của cùng peer thay chỗ (protocol.md 3.2)
+        self.announce = True         # False: thay một kết nối đang open, giao diện đã biết rồi
         self.send_lock = threading.Lock()
 
 
@@ -204,37 +206,54 @@ class Transport:
 
         try:
             sock = self._dial(peer)
-        except ConnectError:
-            self._close(conn, None)
-            raise
+        except ConnectError as exc:
+            self._abandon_outgoing(conn, None, peer, exc)
+            return
 
         with self._cond:
-            if conn.closed:          # stop() chạy trong lúc đang connect()
-                _shutdown_close(sock)
-                raise ConnectError("Chương trình đang thoát")
-            conn.sock = sock
+            if not conn.closed:
+                conn.sock = sock
+            abandoned = conn.closed   # stop() chạy, hoặc kết nối từ bên kia đã thay chỗ
+        if abandoned:
+            self._abandon_outgoing(conn, sock, peer, None)
+            return
 
+        error: ConnectError | None = None
         try:
             # Không cần send_lock: ô còn ở trạng thái "connecting" nên send_chat,
             # disconnect_chat, stop đều chưa ghi lên socket này.
             result = self._handshake_out(sock, peer, "CHAT")
-        except ConnectError:
-            self._close(conn, None)
-            raise
+        except ConnectError as exc:
+            error, result = exc, None
 
-        if result is None:
-            # Bên kia đang giữ một kết nối chat khác với mình: dùng kết nối đó (protocol.md 3.2).
-            self._close(conn, None)
-            with self._cond:
-                ok = self._cond.wait_for(lambda: self._is_open_locked(pid), DUPLICATE_WAIT)
-            if not ok:
-                raise ConnectError(f"{_describe(peer)} báo trùng kết nối nhưng không có kết nối nào")
-            return
+        if result is not None:
+            conn.name = result   # tên thật lấy từ INTRO_OK
+            if self._open(conn):
+                self._start_reader(conn)
+                return
+            # _open thất bại: ô đã bị stop() gỡ, hoặc bị kết nối từ phía bên kia thay.
+        self._abandon_outgoing(conn, sock, peer, error)
 
-        conn.name = result   # tên thật lấy từ INTRO_OK
-        if not self._open(conn):
+    def _abandon_outgoing(self, conn: _ChatConn, sock: socket.socket | None,
+                          peer, error: ConnectError | None) -> None:
+        """Bỏ kết nối chat đi ra của mình; trả về bình thường nếu đã có kết nối khác để dùng.
+
+        Đến đây khi: nhận DUPLICATE (error=None), bị kết nối từ bên kia thay chỗ
+        (conn.superseded), stop() đang chạy, hoặc lỗi thật (error khác None).
+        """
+        superseded = conn.superseded
+        self._close(conn, None)
+        _shutdown_close(sock)      # _close không đóng socket nếu ô đã bị thay trước đó
+        if self._stopping.is_set():
             raise ConnectError("Chương trình đang thoát")
-        self._start_reader(conn)
+        if error is not None and not superseded:
+            raise error
+        # Bên kia đang (hoặc sắp) giữ kết nối do nó khởi tạo: dùng kết nối đó (protocol.md 3.2).
+        if self._wait_open(conn.peer_id, DUPLICATE_WAIT):
+            return
+        if error is not None:
+            raise error
+        raise ConnectError(f"{_describe(peer)} báo trùng kết nối nhưng không có kết nối nào để dùng")
 
     def send_chat(self, peer_id: str, text: str) -> None:
         """Gửi một tin MSG; chưa kết nối thì NotConnected, text sai thì ValueError."""
@@ -388,16 +407,32 @@ class Transport:
 
     def _accept_chat(self, sock: socket.socket, pid: str, pname: str) -> None:
         conn = _ChatConn(sock, pid, pname, incoming=True, initiator=pid, state=_ACCEPTING)
+        old_sock = None
         with self._cond:
+            existing = self._chats.get(pid)
             if self._stopping.is_set():
                 code = "SHUTTING_DOWN"
-            elif pid in self._chats:
-                code = "DUPLICATE"   # PR C3 thay bằng bảng quyết định của protocol.md 3.2
+            elif (existing is not None and existing.initiator == self._my_id
+                  and self._my_id < pid):
+                # protocol.md 3.2: giữ kết nối do bên có peer_id nhỏ hơn (là mình) khởi tạo.
+                code = "DUPLICATE"
             else:
-                self._chats[pid] = conn
                 code = None
+                if existing is not None:
+                    # Hai trường hợp kết nối mới thắng:
+                    #  - existing do mình khởi tạo nhưng pid < my_id (protocol.md 3.2);
+                    #  - existing do chính peer này khởi tạo: peer kết nối lại vì kết nối cũ
+                    #    đã chết ở phía nó (plan Q1). Peer chỉ có một ô cho mình, nên nó
+                    #    không bao giờ mở kết nối thứ hai khi kết nối cũ còn sống.
+                    # Không báo CHAT_CONNECTED lại nếu giao diện đã biết là đang kết nối:
+                    # existing đang open, hoặc chính existing cũng đang thay một kết nối open.
+                    conn.announce = existing.state != _OPEN and existing.announce
+                    old_sock = self._supersede_locked(existing)
+                self._chats[pid] = conn
+        _shutdown_close(old_sock)
         if code is not None:
-            self._reject(sock, code, "đã có kết nối chat" if code == "DUPLICATE" else "bên nhận đang thoát")
+            message = "đã có kết nối chat" if code == "DUPLICATE" else "bên nhận đang thoát"
+            self._reject(sock, code, message)
             return
 
         try:
@@ -406,10 +441,25 @@ class Transport:
             sock.settimeout(None)
         except OSError as exc:
             log.info("gửi INTRO_OK cho %s thất bại: %s", pid, exc)
-            self._close(conn, None)
+            # Nếu kết nối này thay một kết nối đang open thì giao diện cần biết là đã mất.
+            self._close(conn, CLOSE_LOST)
+            _shutdown_close(sock)
             return
         if self._open(conn):
             self._start_reader(conn)
+
+    def _supersede_locked(self, old: _ChatConn) -> socket.socket | None:
+        """Gỡ `old` khỏi bảng vì bị kết nối khác thay, không phát sự kiện (giữ _cond khi gọi).
+
+        Trả socket cần đóng nếu `old` đang open (chỉ luồng đọc của nó còn dùng socket).
+        Ô "connecting"/"accepting" thì luồng đang bắt tay tự đóng socket khi thấy bị thay.
+        """
+        old.closed = True
+        old.superseded = True
+        if self._chats.get(old.peer_id) is old:
+            del self._chats[old.peer_id]
+        self._cond.notify_all()
+        return old.sock if old.state == _OPEN else None
 
     def _reject(self, sock: socket.socket, code: str, message: str) -> None:
         """Gửi INTRO_ERR (bỏ qua lỗi gửi) rồi đóng."""
@@ -454,6 +504,13 @@ class Transport:
         conn = self._chats.get(peer_id)
         return conn is not None and conn.state == _OPEN
 
+    def _wait_open(self, peer_id: str, timeout: float) -> bool:
+        """Chờ tối đa `timeout` giây cho tới khi có kết nối open với peer_id (dừng sớm nếu stop)."""
+        with self._cond:
+            self._cond.wait_for(
+                lambda: self._stopping.is_set() or self._is_open_locked(peer_id), timeout)
+            return self._is_open_locked(peer_id)
+
     def _get_open(self, peer_id: str) -> _ChatConn | None:
         with self._cond:
             conn = self._chats.get(peer_id)
@@ -468,8 +525,10 @@ class Transport:
                 stale = False
                 conn.state = _OPEN
                 # put() trong khóa để CHAT_CONNECTED luôn đứng trước CONNECTION_CLOSED.
-                self._emit(CHAT_CONNECTED, peer_id=conn.peer_id, name=conn.name,
-                           incoming=conn.incoming)
+                # Kết nối thay cho một kết nối đang open thì không báo lại (giao diện đã biết).
+                if conn.announce:
+                    self._emit(CHAT_CONNECTED, peer_id=conn.peer_id, name=conn.name,
+                               incoming=conn.incoming)
                 self._cond.notify_all()
         if stale:
             _shutdown_close(conn.sock)
@@ -490,7 +549,10 @@ class Transport:
             if self._chats.get(conn.peer_id) is conn:
                 del self._chats[conn.peer_id]
             # Đang stop(): không phát sự kiện nào (CLI đang thoát).
-            if reason is not None and conn.state == _OPEN and not self._stopping.is_set():
+            # announce=False: kết nối này thay một kết nối đang open, giao diện coi như
+            # vẫn "đã kết nối" từ trước, nên mất nó cũng phải báo.
+            announced = conn.state == _OPEN or not conn.announce
+            if reason is not None and announced and not self._stopping.is_set():
                 self._emit(CONNECTION_CLOSED, peer_id=conn.peer_id, name=conn.name,
                            reason=reason)
             self._cond.notify_all()

@@ -1,4 +1,4 @@
-"""Test cho transport.py (PR C1–C2). Chạy: python -m unittest tests.test_transport -v"""
+"""Test cho transport.py (PR C1–C3). Chạy: python -m unittest tests.test_transport -v"""
 
 from __future__ import annotations
 
@@ -712,6 +712,238 @@ class TestFile(TransportTest):
         c.send_raw(b"hello")
         self.assertEqual(c.recv()[0], "FILE_DONE")
         self.assertEqual(recv.calls[0][:2], ("11111111", "Raw"))
+
+
+# --- #20–23: trùng kết nối chat (PR C3, protocol.md 3.2) ---------------------
+class TestDuplicate(TransportTest):
+    """Mình đang `connecting` tới một RawServer (giữ INTRO, chưa trả lời) thì một
+    INTRO CHAT khác của cùng peer tới qua RawClient."""
+
+    def held_server(self, peer_id, name):
+        """RawServer nhận INTRO rồi chờ test quyết định trả lời gì."""
+        state = {"intro": threading.Event(), "reply": None, "go": threading.Event(),
+                 "done": threading.Event()}
+
+        def behavior(sock):
+            p.recv_frame(sock)
+            state["intro"].set()
+            state["go"].wait(WAIT)
+            if state["reply"] is not None:
+                p.send_frame(sock, *state["reply"])
+            state["done"].wait(WAIT)      # giữ kết nối mở tới khi test xong
+
+        srv = RawServer(behavior)
+        self.addCleanup(srv.close)
+        self.addCleanup(state["done"].set)
+        return FakePeer(peer_id, name, "127.0.0.1", srv.port), srv, state
+
+    def start_connect(self, t, peer):
+        box = {}
+
+        def run():
+            try:
+                t.connect_chat(peer)
+                box["ok"] = True
+            except Exception as exc:
+                box["error"] = exc
+
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th, box
+
+    def raw(self, t) -> RawClient:
+        c = RawClient(t.port)
+        self.addCleanup(c.close)
+        return c
+
+    def test_smaller_id_keeps_own(self):  # 20
+        a, qa = self.make("aaaaaaaa", "An")             # mình nhỏ hơn
+        peer, srv, st = self.held_server("bbbbbbbb", "Bình")
+        th, box = self.start_connect(a, peer)
+        self.assertTrue(st["intro"].wait(WAIT))
+        c = self.raw(a)
+        ftype, payload = c.handshake("bbbbbbbb", "Bình")
+        self.assertEqual((ftype, p.parse_intro_err(payload)[0]), ("INTRO_ERR", "DUPLICATE"))
+        self.assertTrue(c.is_closed_by_peer())
+        st["reply"] = ("INTRO_OK", p.make_intro_ok("bbbbbbbb", "Bình"))
+        st["go"].set()
+        th.join(WAIT)
+        self.assertEqual(box, {"ok": True})
+        evts = drain(qa)
+        self.assertEqual(types(evts), [ev.CHAT_CONNECTED])
+        self.assertFalse(evts[0].data["incoming"])
+        self.assertTrue(a.is_connected("bbbbbbbb"))
+
+    def test_larger_id_yields(self):  # 20
+        b, qb = self.make("bbbbbbbb", "Bình")           # mình lớn hơn
+        peer, srv, st = self.held_server("aaaaaaaa", "An")
+        th, box = self.start_connect(b, peer)
+        self.assertTrue(st["intro"].wait(WAIT))
+        c = self.raw(b)
+        self.assertEqual(c.handshake("aaaaaaaa", "An")[0], "INTRO_OK")
+        e = wait_event(qb, ev.CHAT_CONNECTED)
+        self.assertTrue(e.data["incoming"])
+        st["reply"] = ("INTRO_ERR", p.make_intro_err("DUPLICATE", "trùng"))
+        st["go"].set()
+        th.join(WAIT)
+        self.assertEqual(box, {"ok": True})            # connect_chat dùng kết nối từ bên kia
+        self.assertEqual(types(drain(qb)), [])         # không CHAT_CONNECTED thứ hai, không CLOSED
+        c.send("MSG", "qua kết nối của An".encode())
+        self.assertEqual(wait_event(qb, ev.CHAT_RECEIVED).data["text"], "qua kết nối của An")
+        b.send_chat("aaaaaaaa", "trả lời")
+        self.assertEqual(p.decode_msg(c.recv()[1]), "trả lời")
+
+    def test_larger_id_yields_even_if_peer_says_ok(self):  # 20
+        b, qb = self.make("bbbbbbbb", "Bình")
+        peer, srv, st = self.held_server("aaaaaaaa", "An")
+        th, box = self.start_connect(b, peer)
+        self.assertTrue(st["intro"].wait(WAIT))
+        c = self.raw(b)
+        self.assertEqual(c.handshake("aaaaaaaa", "An")[0], "INTRO_OK")
+        wait_event(qb, ev.CHAT_CONNECTED)
+        st["reply"] = ("INTRO_OK", p.make_intro_ok("aaaaaaaa", "An"))   # bên kia làm sai quy tắc
+        st["go"].set()
+        th.join(WAIT)
+        self.assertEqual(box, {"ok": True})
+        self.assertEqual(types(drain(qb)), [])
+        # Kết nối đi ra của mình đã bị bỏ: server đọc thấy EOF
+        srv.conns[0].settimeout(WAIT)
+        self.assertEqual(srv.conns[0].recv(1), b"")
+        c.send("MSG", b"ok")
+        self.assertEqual(wait_event(qb, ev.CHAT_RECEIVED).data["text"], "ok")
+
+    def test_simultaneous_connect(self):  # 21
+        a, qa = self.make("aaaaaaaa", "An")
+        b, qb = self.make("bbbbbbbb", "Bình")
+        peer_a, peer_b = self.peer(a, "aaaaaaaa", "An"), self.peer(b, "bbbbbbbb", "Bình")
+        rounds = 50
+        for r in range(rounds):
+            with self.subTest(round=r):
+                barrier = threading.Barrier(2)
+                errors = []
+
+                def go(t, peer):
+                    barrier.wait()
+                    try:
+                        t.connect_chat(peer)
+                    except Exception as exc:
+                        errors.append(exc)
+
+                ths = [threading.Thread(target=go, args=(a, peer_b)),
+                       threading.Thread(target=go, args=(b, peer_a))]
+                for th in ths:
+                    th.start()
+                for th in ths:
+                    th.join(WAIT * 3)
+                self.assertEqual(errors, [])
+                self.assertTrue(wait_until(
+                    lambda: a.is_connected("bbbbbbbb") and b.is_connected("aaaaaaaa")))
+                ea, eb = drain(qa, 0.05), drain(qb, 0.05)
+                self.assertEqual(types(ea), [ev.CHAT_CONNECTED])
+                self.assertEqual(types(eb), [ev.CHAT_CONNECTED])
+                # Một bên thấy kết nối đến, bên kia thấy kết nối đi: cùng một kết nối.
+                self.assertNotEqual(ea[0].data["incoming"], eb[0].data["incoming"])
+                a.send_chat("bbbbbbbb", f"vòng {r}")
+                self.assertEqual(wait_event(qb, ev.CHAT_RECEIVED).data["text"], f"vòng {r}")
+                b.send_chat("aaaaaaaa", f"đáp {r}")
+                self.assertEqual(wait_event(qa, ev.CHAT_RECEIVED).data["text"], f"đáp {r}")
+                a.disconnect_chat("bbbbbbbb")
+                wait_event(qa, ev.CONNECTION_CLOSED)
+                wait_event(qb, ev.CONNECTION_CLOSED)
+                self.assertTrue(wait_until(lambda: not b.is_connected("aaaaaaaa")))
+
+    def test_duplicate_without_other_connection(self):  # 22
+        a, qa = self.make("aaaaaaaa", "An")
+        peer, srv, st = self.held_server("bbbbbbbb", "Bình")
+        st["reply"] = ("INTRO_ERR", p.make_intro_err("DUPLICATE", "trùng"))
+        st["go"].set()
+        with mock.patch.object(transport, "DUPLICATE_WAIT", 0.3):
+            start = time.monotonic()
+            with self.assertRaises(ConnectError) as cm:
+                a.connect_chat(peer)
+            elapsed = time.monotonic() - start
+        self.assertGreaterEqual(elapsed, 0.25)
+        self.assertLess(elapsed, 2.0)
+        self.assertIn("trùng", str(cm.exception))
+        self.assertFalse(a.is_connected("bbbbbbbb"))
+        self.assertEqual(types(drain(qa)), [])
+
+    def test_stop_while_waiting_for_duplicate(self):  # 22
+        a, _ = self.make("aaaaaaaa", "An")
+        peer, srv, st = self.held_server("bbbbbbbb", "Bình")
+        st["reply"] = ("INTRO_ERR", p.make_intro_err("DUPLICATE", "trùng"))
+        th, box = self.start_connect(a, peer)
+        self.assertTrue(st["intro"].wait(WAIT))
+        st["go"].set()
+        time.sleep(0.1)                 # để connect_chat vào bước chờ DUPLICATE_WAIT
+        start = time.monotonic()
+        a.stop()
+        th.join(WAIT)
+        self.assertLess(time.monotonic() - start, 1.0)
+        self.assertIsInstance(box.get("error"), ConnectError)
+
+    def test_same_peer_reconnects(self):  # 23 (Q1)
+        b, qb = self.make("bbbbbbbb", "Bình")
+        old = self.raw(b)
+        old.handshake("11111111", "Raw")
+        wait_event(qb, ev.CHAT_CONNECTED)
+        new = self.raw(b)                # kết nối cũ đã chết ở phía Raw, Raw kết nối lại
+        self.assertEqual(new.handshake("11111111", "Raw")[0], "INTRO_OK")
+        self.assertTrue(old.is_closed_by_peer())
+        self.assertEqual(types(drain(qb)), [])      # thay êm: không CLOSED, không CONNECTED mới
+        self.assertTrue(b.is_connected("11111111"))
+        new.send("MSG", "vẫn chat được".encode())
+        self.assertEqual(wait_event(qb, ev.CHAT_RECEIVED).data["text"], "vẫn chat được")
+        b.send_chat("11111111", "nhận rồi")
+        self.assertEqual(p.decode_msg(new.recv()[1]), "nhận rồi")
+        new.close()
+        self.assertEqual(wait_event(qb, ev.CONNECTION_CLOSED).data["reason"], ev.CLOSE_LOST)
+        self.assertEqual(types(drain(qb)), [])
+
+    def test_half_open_mine_replaced_by_smaller(self):  # 23
+        b, qb = self.make("bbbbbbbb", "Bình")
+        peer, srv, st = self.held_server("aaaaaaaa", "An")
+        st["reply"] = ("INTRO_OK", p.make_intro_ok("aaaaaaaa", "An"))
+        st["go"].set()
+        b.connect_chat(peer)
+        wait_event(qb, ev.CHAT_CONNECTED)
+        # Kết nối do mình mở đã chết ở phía An; An (id nhỏ hơn) kết nối lại.
+        c = self.raw(b)
+        self.assertEqual(c.handshake("aaaaaaaa", "An")[0], "INTRO_OK")
+        srv.conns[0].settimeout(WAIT)
+        self.assertEqual(srv.conns[0].recv(1), b"")
+        self.assertEqual(types(drain(qb)), [])
+        b.send_chat("aaaaaaaa", "qua kết nối mới")
+        self.assertEqual(p.decode_msg(c.recv()[1]), "qua kết nối mới")
+
+    def test_half_open_mine_kept_if_smaller(self):  # 23 — giới hạn đã biết
+        """Mình id nhỏ hơn và đang giữ kết nối do mình mở: kết nối mới của peer bị DUPLICATE.
+
+        Đúng theo protocol.md 3.2, nhưng nếu kết nối của mình thực ra đã chết một chiều
+        thì peer chỉ kết nối lại được sau khi mình phát hiện mất kết nối (khi gửi tin).
+        """
+        a, qa = self.make("aaaaaaaa", "An")
+        peer, srv, st = self.held_server("bbbbbbbb", "Bình")
+        st["reply"] = ("INTRO_OK", p.make_intro_ok("bbbbbbbb", "Bình"))
+        st["go"].set()
+        a.connect_chat(peer)
+        wait_event(qa, ev.CHAT_CONNECTED)
+        c = self.raw(a)
+        ftype, payload = c.handshake("bbbbbbbb", "Bình")
+        self.assertEqual((ftype, p.parse_intro_err(payload)[0]), ("INTRO_ERR", "DUPLICATE"))
+        self.assertTrue(a.is_connected("bbbbbbbb"))
+        self.assertEqual(types(drain(qa)), [])
+
+    def test_replacing_open_then_failing_reports_lost(self):  # 23
+        b, qb = self.make("bbbbbbbb", "Bình")
+        old = self.raw(b)
+        old.handshake("11111111", "Raw")
+        wait_event(qb, ev.CHAT_CONNECTED)
+        new = self.raw(b)
+        new.handshake("11111111", "Raw")
+        new.close()                      # kết nối thay thế cũng mất
+        self.assertEqual(wait_event(qb, ev.CONNECTION_CLOSED).data["reason"], ev.CLOSE_LOST)
+        self.assertFalse(b.is_connected("11111111"))
 
 
 if __name__ == "__main__":
