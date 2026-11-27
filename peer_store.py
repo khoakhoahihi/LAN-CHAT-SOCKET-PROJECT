@@ -18,7 +18,7 @@ class Peer:
 
 
 class PeerStore:
-    """Lưu peer theo ID và trả các bản sao độc lập cho bên gọi."""
+    """CLI chỉ đọc qua get_peers/get/find_by_name; discovery quản lý ghi."""
 
     def __init__(self) -> None:
         """Khởi tạo kho rỗng và khóa bảo vệ dữ liệu."""
