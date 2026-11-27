@@ -163,15 +163,13 @@ class Transport:
             _shutdown_close(listener)
 
         for conn in conns:
-            if conn.state == _OPEN and conn.send_lock.acquire(blocking=False):
+            state = self._detach(conn, None)   # đang thoát: không phát sự kiện
+            if state is None:
+                continue
+            if state == _OPEN:
                 # Không chờ khóa: nếu một luồng đang kẹt trong sendall thì bỏ qua BYE.
-                try:
-                    send_frame(conn.sock, "BYE", b"")
-                except OSError:
-                    pass
-                finally:
-                    conn.send_lock.release()
-            self._close(conn, None)   # đang thoát: không phát sự kiện
+                self._send_bye(conn, wait_lock=False)
+            _shutdown_close(conn.sock)
 
         if self._acceptor is not None and self._acceptor is not threading.current_thread():
             self._acceptor.join(CONNECT_TIMEOUT)
@@ -279,14 +277,10 @@ class Transport:
     def disconnect_chat(self, peer_id: str) -> None:
         """Gửi BYE rồi đóng kết nối chat; không có kết nối thì bỏ qua."""
         conn = self._get_open(peer_id)
-        if conn is None:
+        if conn is None or self._detach(conn, CLOSE_LOCAL_LEAVE) is None:
             return
-        with conn.send_lock:
-            try:
-                send_frame(conn.sock, "BYE", b"")
-            except OSError:
-                pass
-        self._close(conn, CLOSE_LOCAL_LEAVE)
+        self._send_bye(conn, wait_lock=True)
+        _shutdown_close(conn.sock)
 
     def is_connected(self, peer_id: str) -> bool:
         """Có kết nối chat đang mở với peer_id hay không."""
@@ -433,20 +427,44 @@ class Transport:
             return False
         return True
 
-    def _close(self, conn: _ChatConn, reason: str | None) -> bool:
-        """Đóng kết nối đúng một lần; phát CONNECTION_CLOSED nếu reason khác None và ô đã open."""
+    def _detach(self, conn: _ChatConn, reason: str | None) -> str | None:
+        """Gỡ kết nối khỏi bảng đúng một lần và phát CONNECTION_CLOSED nếu cần.
+
+        Trả trạng thái của ô trước khi gỡ, hoặc None nếu nơi khác đã gỡ rồi.
+        Không đụng socket: người gọi tự gửi BYE (nếu cần) rồi đóng. Gỡ TRƯỚC khi
+        gửi BYE để luồng đọc, khi thấy bên kia đóng theo, không phát nhầm "lost".
+        """
         with self._cond:
             if conn.closed:
-                return False
+                return None
             conn.closed = True
             if self._chats.get(conn.peer_id) is conn:
                 del self._chats[conn.peer_id]
-            if reason is not None and conn.state == _OPEN:
+            # Đang stop(): không phát sự kiện nào (CLI đang thoát).
+            if reason is not None and conn.state == _OPEN and not self._stopping.is_set():
                 self._emit(CONNECTION_CLOSED, peer_id=conn.peer_id, name=conn.name,
                            reason=reason)
             self._cond.notify_all()
+            return conn.state
+
+    def _close(self, conn: _ChatConn, reason: str | None) -> bool:
+        """Gỡ kết nối (xem _detach) rồi đóng socket; False nếu đã đóng trước đó."""
+        if self._detach(conn, reason) is None:
+            return False
         _shutdown_close(conn.sock)
         return True
+
+    @staticmethod
+    def _send_bye(conn: _ChatConn, wait_lock: bool) -> None:
+        """Gửi BYE qua send_lock, bỏ qua lỗi; wait_lock=False thì bỏ qua nếu khóa đang bận."""
+        if not conn.send_lock.acquire(blocking=wait_lock):
+            return
+        try:
+            send_frame(conn.sock, "BYE", b"")
+        except OSError:
+            pass
+        finally:
+            conn.send_lock.release()
 
     def _emit(self, etype: str, **data) -> None:
         self._events.put(Event(etype, data))
