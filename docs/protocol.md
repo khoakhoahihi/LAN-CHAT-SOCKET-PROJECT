@@ -138,16 +138,18 @@ Khi gặp `TYPE` lạ, `LEN` sai, payload sai cấu trúc hoặc frame không h�
 | `INTRO_OK` | chat, file | bên nhận → bên kết nối | `<peer_id>\|<name>` của bên nhận |
 | `INTRO_ERR` | chat, file | bên nhận → bên kết nối, sau đó đóng | `<code>\|<message>` |
 | `MSG` | chat | hai chiều | văn bản một dòng, không chứa `\n` hoặc `\r` |
-| `BYE` | chat | hai chiều | rỗng (`BYE\|0\|`) |
+| `BYE` | chat | hai chiều | rỗng (`BYE\|0\|`); payload khác rỗng là lỗi giao thức |
 | `FILE_META` | file | gửi → nhận | `<file_id>\|<size>\|<filename>` |
 | *(byte thô)* | file | gửi → nhận | đúng `size` byte |
 | `FILE_DONE` | file | nhận → gửi | `<file_id>\|<sha256_hex>` |
 | `FILE_ERR` | file | hai chiều, sau đó đóng | `<file_id>\|<code>\|<message>` |
 
 Mã lỗi của `INTRO_ERR`:
-- `BAD_INTRO`: frame đầu tiên không phải `INTRO`, hoặc sai cấu trúc.
-- `DUPLICATE`: kết nối chat trùng (mục 3.2).
+- `BAD_INTRO`: frame đầu tiên không phải `INTRO`, sai cấu trúc, hoặc `peer_id` trùng với `peer_id` của chính bên nhận.
+- `DUPLICATE`: kết nối chat trùng (mục 3.2). Chỉ dùng cho kết nối chat; nhận `DUPLICATE` trên kết nối file là lỗi giao thức.
 - `SHUTTING_DOWN`: bên nhận đang thoát.
+
+Bên kết nối nhận `INTRO_ERR` có mã không nằm trong danh sách trên thì coi là lỗi giao thức.
 
 Mã lỗi của `FILE_ERR`:
 - `BAD_META`: `FILE_META` sai cấu trúc hoặc tên file không hợp lệ.
@@ -190,14 +192,32 @@ sequenceDiagram
 - Mọi lần ghi lên cùng một socket chat phải đi qua **cùng một khóa gửi**, để hai luồng không ghi xen frame.
 - Gửi `MSG` khi chưa xong bước `INTRO` là lỗi giao thức.
 
-### 3.2 Hai bên cùng `/chat` nhau một lúc
+### 3.2 Kết nối chat trùng
 
-Nếu đã có kết nối chat với cùng một `peer_id` (đã mở hoặc đang bắt tay) mà lại xuất hiện thêm một kết nối nữa, thì **giữ kết nối do bên có `peer_id` nhỏ hơn khởi tạo** (so sánh chuỗi). Hai bên áp dụng cùng quy tắc nên luôn ra cùng kết quả:
+Mỗi cặp peer chỉ giữ **một** kết nối chat. Giả sử mình có `peer_id` là `M` và đã có một kết nối chat với peer `P` (đã mở hoặc đang bắt tay), rồi lại nhận thêm một `INTRO|…|CHAT|P|…`. Khi đó mình quyết định theo bảng sau. Hai bên áp dụng cùng một bảng nên luôn giữ cùng một kết nối.
 
-- Nếu mình là **bên nhận** của kết nối bị loại: gửi `INTRO_ERR|…|DUPLICATE|…` rồi đóng.
-- Nếu mình là **bên khởi tạo** và nhận `DUPLICATE`: đóng kết nối của mình, rồi chờ tối đa `DUPLICATE_WAIT` (2 giây) để kết nối từ phía bên kia được đăng ký và dùng kết nối đó. Hết thời gian mà vẫn chưa có thì báo lỗi kết nối.
+| # | Kết nối đang có do ai khởi tạo | Điều kiện | Quyết định |
+|---|---|---|---|
+| 1 | Mình (`M`) | `M < P` | Giữ kết nối của mình. Gửi `INTRO_ERR\|…\|DUPLICATE\|…` cho kết nối mới rồi đóng |
+| 2 | Mình (`M`) | `P < M` | Nhận kết nối mới, bỏ kết nối của mình |
+| 3 | Chính `P` | — | Nhận kết nối mới, bỏ kết nối cũ |
 
-Kết nối bị loại **không phát sự kiện nào**. Lý do: sự kiện gắn với `peer_id`, mà peer đó vẫn còn kết nối được giữ. Nếu phát `CONNECTION_CLOSED`, giao diện sẽ báo nhầm là cuộc chat đã đóng. `CHAT_CONNECTED` chỉ phát **một lần**, khi kết nối được giữ được đăng ký.
+So sánh `peer_id` theo chuỗi.
+
+- **Dòng 1–2: hai bên cùng `/chat` nhau một lúc.** Giữ kết nối do bên có `peer_id` nhỏ hơn khởi tạo.
+- **Dòng 3: `P` kết nối lại.** Kết nối cũ đã chết ở phía `P` (ví dụ mạng của `P` bị ngắt rồi có lại), nhưng phía mình chưa phát hiện ra. `P` chỉ giữ một kết nối chat với mình và luôn dùng lại kết nối đang mở. Vì vậy `P` mở kết nối mới chỉ khi kết nối cũ đã hỏng ở phía nó.
+
+Phía bên khởi tạo, khi nhận `DUPLICATE`, hoặc khi kết nối đang bắt tay của mình bị bỏ theo dòng 2:
+- Đóng kết nối của mình.
+- Chờ tối đa `DUPLICATE_WAIT` (2 giây) để kết nối do bên kia khởi tạo được đăng ký, rồi dùng kết nối đó.
+- Hết thời gian mà vẫn chưa có thì báo lỗi kết nối.
+
+Sự kiện:
+- Kết nối bị loại **không phát sự kiện nào**. Lý do: sự kiện gắn với `peer_id`, mà peer đó vẫn còn kết nối được giữ. Nếu phát `CONNECTION_CLOSED`, giao diện sẽ báo nhầm là cuộc chat đã đóng.
+- `CHAT_CONNECTED` chỉ phát **một lần**, khi kết nối được giữ được đăng ký.
+- Nếu kết nối mới thay một kết nối **đang mở** (dòng 2 hoặc 3), **không** phát lại `CHAT_CONNECTED`, vì giao diện vẫn đang coi là đã kết nối. Nếu sau đó kết nối mới cũng đóng thì vẫn phát `CONNECTION_CLOSED` như bình thường.
+
+> **Giới hạn đã biết.** Giả sử kết nối do mình khởi tạo, `M < P`, và kết nối đó đã chết ở phía `P`. Khi `P` kết nối lại, kết nối mới bị trả `DUPLICATE` theo dòng 1. `P` chỉ kết nối lại được sau khi phía mình phát hiện mất kết nối, tức là khi mình gửi tin tiếp theo. Giao thức v1 không có heartbeat để phát hiện sớm hơn.
 
 ### 3.3 Đóng kết nối
 
@@ -207,7 +227,8 @@ Kết nối bị loại **không phát sự kiện nào**. Lý do: sự kiện g
 | Nhận `BYE` từ bên kia | `bye` |
 | `recv()` trả về `b""` hoặc gặp lỗi socket khi chưa nhận `BYE` | `lost` |
 | Lỗi giao thức | `protocol_error` |
-| Bị loại vì trùng kết nối (mục 3.2) | không phát `CONNECTION_CLOSED` |
+| Bị loại hoặc bị thay vì trùng kết nối (mục 3.2) | không phát `CONNECTION_CLOSED` |
+| Mình thoát chương trình (`/quit`) → gửi `BYE` cho mọi kết nối chat rồi đóng | không phát ở phía mình; bên kia nhận `bye` |
 
 Quy tắc khi đóng:
 - Đóng kết nối chat **không xoá** lịch sử và số tin chưa đọc.
