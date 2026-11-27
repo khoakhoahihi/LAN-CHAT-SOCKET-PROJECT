@@ -61,18 +61,26 @@ class Discovery:
 ```python
 # protocol.py
 class ProtocolError(Exception): ...
-class ConnectionClosed(Exception): ...
+class ConnectionClosed(ConnectionError): ...   # là OSError: transport chỉ cần `except OSError`
 def recv_exact(sock, n: int) -> bytes
 def send_frame(sock, ftype: str, payload: bytes) -> None   # không tự khóa; transport khóa thay
 def recv_frame(sock) -> tuple[str, bytes]                   # đọc header từng byte, không đọc dư
 
 # Kiểm tra trường và tạo/đọc payload (protocol.md mục 0 và 2.4); parse_* sai cấu trúc: raise ProtocolError
 def is_valid_name(name: str) -> bool        # main.py dùng để kiểm tra --name
-def is_valid_peer_id(peer_id: str) -> bool  # Người 1 dùng khi đọc HELLO
+def is_valid_peer_id(peer_id: str) -> bool  # Người 1 dùng khi đọc HELLO; dùng chung cho file_id
+def is_valid_status(status: str) -> bool
+def new_id() -> str                         # 8 ký tự hex ngẫu nhiên, cho peer_id và file_id
 def make_intro(kind: str, peer_id: str, name: str) -> bytes
 def parse_intro(payload: bytes) -> tuple[str, str, str]     # (kind, peer_id, name)
+def make_intro_ok(peer_id: str, name: str) -> bytes
 def parse_intro_ok(payload: bytes) -> tuple[str, str]       # (peer_id, name)
-def parse_intro_err(payload: bytes) -> tuple[str, str]      # (code, message)
+def make_intro_err(code: str, message: str) -> bytes
+def parse_intro_err(payload: bytes) -> tuple[str, str]      # (code, message); mã lạ: raise ProtocolError
+def encode_msg(text: str) -> bytes          # có \n, \r hoặc quá MAX_FRAME_PAYLOAD byte: raise ValueError
+def decode_msg(payload: bytes) -> str       # không phải UTF-8 hoặc có \n, \r: raise ProtocolError
+# Quy ước lỗi: make_*/encode_* (đầu vào từ code của mình) raise ValueError/TypeError;
+# parse_*/decode_*/recv_frame (dữ liệu từ mạng) raise ProtocolError.
 
 # transport.py
 class ConnectError(Exception): ...    # message đọc được cho người dùng
@@ -83,7 +91,9 @@ FileHandler = Callable[[socket.socket, str, str], None]   # (sock, peer_id, name
 class Transport:
     def __init__(self, my_id: str, name: str, tcp_port: int,
                  events: queue.Queue, on_file_connection: FileHandler): ...
-    def start(self) -> None
+    def start(self) -> None                           # cổng TCP bận: raise OSError, main.py báo lỗi rồi thoát
+    @property
+    def port(self) -> int | None                      # cổng đang nghe (hữu ích khi tcp_port=0); None nếu chưa start
     def connect_chat(self, peer: Peer) -> None        # đã có kết nối thì dùng lại; lỗi: raise ConnectError
     def send_chat(self, peer_id: str, text: str) -> None
         # chưa có kết nối: raise NotConnected
@@ -95,6 +105,8 @@ class Transport:
         # đã xong INTRO FILE / INTRO_OK; từ đây socket thuộc về người gọi
         # lỗi connect, timeout, INTRO_ERR hoặc peer_id trong INTRO_OK không khớp: raise ConnectError
     def stop(self) -> None
+        # gửi BYE cho mọi kết nối chat rồi đóng, KHÔNG phát CONNECTION_CLOSED (CLI đang thoát);
+        # không đụng socket file đã bàn giao; gọi nhiều lần không lỗi
 ```
 
 - `on_file_connection` được gọi **trên một luồng mới** do `Transport` tạo, sau khi đã gửi `INTRO_OK`. Không gọi trên luồng acceptor.
@@ -102,6 +114,8 @@ class Transport:
 - Socket file được bàn giao ở chế độ blocking (`settimeout(None)`). Người 3 tự đặt timeout cho phần truyền file (protocol.md mục 4.1).
 - `connect_chat` có thể chặn tới khoảng **10 giây**: `CONNECT_TIMEOUT` 3 s + `INTRO_TIMEOUT` 5 s + `DUPLICATE_WAIT` 2 s. Nên gọi nó trên một luồng phụ để dòng nhập không bị đứng. Không gọi khi đang giữ khóa màn hình.
 - `CHAT_CONNECTED` chỉ phát một lần cho mỗi kết nối được đăng ký. Kết nối bị loại vì trùng (protocol.md mục 3.2) không phát sự kiện nào.
+- `Transport` phát `ERROR(source="tcp")` chỉ trong hai trường hợp: `accept()` lỗi bất thường, hoặc `on_file_connection` ném exception. Kết nối đến bắt tay thất bại (máy lạ gửi rác, không gửi `INTRO`, timeout) chỉ được ghi log, để không làm phiền giao diện.
+- `send_chat` có thể chặn nếu bên kia ngừng đọc và bộ đệm gửi của TCP đầy. Tin chat nhỏ nên hiếm gặp, nhưng không gọi nó khi đang giữ khóa màn hình.
 
 ### 2.4 Người 3 — `file_transfer.py`, `chat_state.py`, `cli.py`, `main.py`
 
@@ -145,6 +159,7 @@ class Event:
 | `ERROR` | Tất cả | `source: "udp" \| "tcp" \| "file" \| "cli"`, `message: str`, `file_id` (nếu liên quan) |
 
 - Chỉ `cli.py` đọc hàng đợi `events`. Các module khác chỉ `put()`.
+- `name` trong `CHAT_CONNECTED`, `CHAT_RECEIVED` và `CONNECTION_CLOSED` là tên lúc bắt tay (lấy từ `INTRO` / `INTRO_OK`), nên có thể đã cũ nếu bên kia đổi tên sau đó. `cli.py` nên ưu tiên tên hiện tại trong `PeerStore`, và chỉ dùng `name` của sự kiện khi peer không còn trong danh sách.
 - `FILE_COMPLETED` chỉ phát khi chắc chắn thành công: bên gửi nhận `FILE_DONE` có hash khớp, bên nhận đã lưu file và gửi `FILE_DONE`. Ba kết quả của bên gửi được liệt kê ở protocol.md mục 4.2.
 - `CHAT_CONNECTED` và `FILE_UNCONFIRMED` được thêm so với danh sách trong tài liệu phân công. `CHAT_CONNECTED` dùng để thông báo khi có người khác mở chat tới mình.
 - Muốn thêm loại sự kiện: thêm vào bảng này trong cùng PR.
