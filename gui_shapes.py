@@ -131,6 +131,15 @@ def draw_rounded(
             canvas.create_image(x, y, image=corner_image(canvas, radius, corner, color), anchor="nw", tags=tags)
 
 
+def draw_rounded_outlined(
+    canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int,
+    radii: tuple[int, int, int, int], fill: str, border: str, tags: tuple = (),
+) -> None:
+    draw_rounded(canvas, x1, y1, x2, y2, radii, border, tags)
+    inner = tuple(max(radius - 1, 0) for radius in radii)
+    draw_rounded(canvas, x1 + 1, y1 + 1, x2 - 1, y2 - 1, inner, fill, tags)
+
+
 def draw_rounded_border(
     canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int,
     radius: int, fill: str, border: str, tags: tuple = (),

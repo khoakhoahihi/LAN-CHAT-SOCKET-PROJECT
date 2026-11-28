@@ -24,7 +24,7 @@ STATUS_COLORS = {"online": "#30A46C", "away": "#F5A524"}
 
 LIGHT = {
     "bg": "#FFFFFF", "panel": "#F8F9FA", "text": "#1C2024", "muted": "#60646C", "subtle": "#8B8D98",
-    "surface": "#FFFFFF", "flake": "",
+    "surface": "#FFFFFF", "flake": "", "other_border": "", "badge": "#3E63DD", "on_badge": "#FFFFFF",
     "line": "#E6E8EB", "hover": "#EEF0F3", "selected": "#E6ECFE",
     "accent": "#3E63DD", "accent_hover": "#3558C9", "accent_press": "#2F4EB5", "on_accent": "#FFFFFF",
     "field": "#F1F3F5", "field_focus": "#FFFFFF", "ring": "#C7D4FB",
@@ -35,7 +35,7 @@ LIGHT = {
 }
 DARK = {
     "bg": "#111214", "panel": "#17181B", "text": "#ECEEF1", "muted": "#A1A6AE", "subtle": "#767B84",
-    "surface": "#111214", "flake": "",
+    "surface": "#111214", "flake": "", "other_border": "", "badge": "#4C6BEB", "on_badge": "#FFFFFF",
     "line": "#26282D", "hover": "#202226", "selected": "#1E2A55",
     "accent": "#4C6BEB", "accent_hover": "#6382F0", "accent_press": "#3E5CD6", "on_accent": "#FFFFFF",
     "field": "#1F2125", "field_focus": "#17181B", "ring": "#2B3A78",
@@ -46,19 +46,24 @@ DARK = {
 }
 
 CHRISTMAS = {
-    "bg": "#D6EBFA", "panel": "#E9F4FC", "text": "#16304D", "muted": "#4F6E8E", "subtle": "#7F9BB8",
-    "surface": "#F2F9FE", "flake": "#FFFFFF",
-    "line": "#BDD9EE", "hover": "#D3E8F8", "selected": "#FFDAD6",
-    "accent": "#E53935", "accent_hover": "#D32F2F", "accent_press": "#B71C1C", "on_accent": "#FFFFFF",
-    "field": "#FFFFFF", "field_focus": "#FFFFFF", "ring": "#FFC4C0",
-    "mine": "#E53935", "mine_text": "#FFFFFF", "mine_time": "#FFD6D3",
-    "other": "#FFFFFF", "other_text": "#16304D", "other_time": "#7F9BB8",
-    "chip": "#FFE082", "chip_text": "#6B4F00", "error": "#C62828", "disabled": "#C5DBEC",
-    "scroll": "#A9C8E2", "scroll_hover": "#7FA8CC",
+    "bg": "#DDEBF5", "panel": "#F0F5F8", "surface": "#F8FBFC", "flake": "#FFFFFF",
+    "text": "#16282D", "muted": "#4D646B", "subtle": "#7F959C",
+    "line": "#CBDDE6", "hover": "#E3EEF3", "selected": "#DCEBE2",
+    "accent": "#B3263E", "accent_hover": "#9C1F34", "accent_press": "#841A2C", "on_accent": "#FFFFFF",
+    "field": "#FFFFFF", "field_focus": "#FFFFFF", "ring": "#E7B9C0",
+    "mine": "#B3263E", "mine_text": "#FFFFFF", "mine_time": "#F2C5CC",
+    "other": "#FFFFFF", "other_text": "#16282D", "other_time": "#7F959C", "other_border": "#C7DAE4",
+    "chip": "#1F6B4F", "chip_text": "#FFFFFF", "error": "#A31F34", "disabled": "#D3DFE5",
+    "scroll": "#B1C7CF", "scroll_hover": "#86A5B0", "badge": "#E3A93C", "on_badge": "#3A2A05",
 }
 THEMES = {"light": LIGHT, "dark": DARK, "christmas": CHRISTMAS}
 THEME_ORDER = ("light", "dark", "christmas")
-GARLAND_COLORS = ("#E53935", "#43A047", "#FFC107", "#1E88E5")
+
+
+def mix(first: str, second: str, ratio: float) -> str:
+    channels = zip((int(first[i:i + 2], 16) for i in (1, 3, 5)), (int(second[i:i + 2], 16) for i in (1, 3, 5)))
+    return "#" + "".join(f"{round(a * (1 - ratio) + b * ratio):02X}" for a, b in channels)
+
 
 MESSAGE_LINE = re.compile(r"\[([^\]]+)\] (.*)", re.S)
 

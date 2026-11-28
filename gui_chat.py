@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from gui_festive import TILE, draw_wallpaper
-from gui_shapes import draw_rounded
+from gui_shapes import draw_rounded, draw_rounded_outlined
 from gui_style import LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, Fonts
 from gui_widgets import SlimScrollbar
 
@@ -72,6 +72,8 @@ class ConversationView(tk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.configure(yscrollcommand=self._on_scrolled)
         self.canvas.bind("<Configure>", self._on_resize)
+        self.canvas.bind("<Button-3>", self._on_context)
+        self.canvas.bind("<Control-Button-1>", self._on_context)
         self.bind("<Destroy>", lambda _event: self.cancel_pending())
 
     def apply_palette(self, palette: dict[str, str]) -> None:
@@ -115,6 +117,19 @@ class ConversationView(tk.Frame):
     def has_notices_since(self, index: int) -> bool:
         return any(line.kind in NOTICE_KINDS for line in self.lines[index:])
 
+    def line_at(self, x: float, y: float) -> int | None:
+        px, py = self.canvas.canvasx(x), self.canvas.canvasy(y)
+        for item in reversed(self.canvas.find_overlapping(px, py, px, py)):
+            for tag in self.canvas.gettags(item):
+                if tag.startswith("block") and tag[5:].isdigit():
+                    return int(tag[5:])
+        return None
+
+    def copy_line(self, index: int) -> None:
+        root = self.winfo_toplevel()
+        root.clipboard_clear()
+        root.clipboard_append(self.lines[index].text)
+
     def anchor_offset(self) -> int:
         return self._offset
 
@@ -141,6 +156,17 @@ class ConversationView(tk.Frame):
             except tk.TclError:
                 pass
             self._resize_job = None
+
+    def _on_context(self, event: tk.Event) -> None:
+        index = self.line_at(event.x, event.y)
+        if index is None:
+            return
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Copy text", command=lambda: self.copy_line(index))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
 
     def _finish_scroll(self) -> None:
         self._scroll_job = None
@@ -306,7 +332,11 @@ class ConversationView(tk.Frame):
         shape = f"shape{index}"
         radii = bubble_radii(mine, is_first, is_last)
         fill = palette["mine" if mine else "other"]
-        draw_rounded(canvas, left, top, left + width, top + height, radii, fill, tags=(*tags, shape))
+        box = (left, top, left + width, top + height)
+        if palette["other_border"] and not mine:
+            draw_rounded_outlined(canvas, *box, radii, fill, palette["other_border"], tags=(*tags, shape))
+        else:
+            draw_rounded(canvas, *box, radii, fill, tags=(*tags, shape))
         canvas.tag_lower(shape, text_id)
         canvas.coords(text_id, left + SP_MD, top + SP_SM + name_h)
         if show_name:

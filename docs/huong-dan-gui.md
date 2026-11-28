@@ -23,10 +23,10 @@ Cần `tkinter`. Windows và macOS đã có sẵn. Ubuntu cài thêm: `sudo apt 
 
 | Khu vực | Nội dung |
 |---|---|
-| Cột trái, trên cùng | Ô **Search**: gõ để lọc danh sách theo tên |
+| Cột trái, trên cùng | Tiêu đề **Messages** kèm số người đang online, và ô **Search**: gõ để lọc danh sách theo tên |
 | Cột trái, giữa | Người đang online: avatar màu, tên, tin cuối kèm giờ (chưa có tin thì hiện trạng thái), chấm xanh (online) hoặc cam (away), huy hiệu số tin chưa đọc |
 | Cột trái, dưới cùng | Thẻ hồ sơ của bạn (avatar, tên, trạng thái; bấm vào để đổi `online`/`away`) và nút icon đổi giao diện (sáng, tối, Giáng sinh) |
-| Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ; bên phải là nút gửi file và nút đóng cuộc chat |
+| Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ; bên phải là nút `i` (bảng thông tin), nút gửi file và nút đóng cuộc chat |
 | Khung giữa | Hội thoại: tin nhắn dạng bong bóng (ít tin thì nằm sát ô nhập) và các thông báo của chương trình. Chưa chọn ai thì hiện ba gợi ý nhanh: tìm người, đổi trạng thái, đổi giao diện |
 | Hàng dưới cùng | Nút **+** gửi file, ô nhập tin, nút gửi |
 
@@ -63,11 +63,20 @@ Bên nhận: file lưu vào thư mục `downloads/` (hoặc thư mục đặt b�
 
 ![Giao diện tối](img/gui-toi.png)
 
-Giao diện Giáng sinh có nền xanh băng với hoa tuyết lặp lại; bong bóng và chữ nằm trên mặt phẳng đặc nên vẫn dễ đọc.
+Giao diện Giáng sinh có nền xanh băng với hoa tuyết, dây thông kèm quả mọng, bóng vàng và đèn trên đầu, cành tầm gửi cạnh tiêu đề, bong bóng đỏ nam việt quất; bong bóng và chữ nằm trên mặt phẳng đặc nên vẫn dễ đọc.
 
 ![Giao diện Giáng sinh](img/gui-giang-sinh.png)
 
-## 7. Gõ lệnh trong ô nhập
+## 7. Bảng thông tin, thông báo nổi, chép tin và phím tắt
+
+- **Bảng thông tin:** bấm nút `i` ở thanh tiêu đề (hoặc `Ctrl+I`), cửa sổ mở rộng sang phải. Bảng hiện avatar, trạng thái và địa chỉ của người đang chat, danh sách **Shared files** (file đã gửi và nhận trong phiên này, kèm kích thước và giờ) và nút **Open downloads folder**. Bấm vào một file đã nhận để mở thư mục chứa nó.
+- **Thông báo nổi:** khi người khác nhắn mà bạn đang chat với người khác, một thẻ nhỏ hiện ở góc phải trên khung chat trong 5 giây. Bấm vào thẻ để chuyển sang chat đó.
+- **Chép tin:** bấm chuột phải vào một tin nhắn, chọn **Copy text**.
+- **Phím tắt:** `Esc` đóng cuộc chat hiện tại (hoặc xoá ô tìm kiếm nếu chưa chat), `Ctrl+K` nhảy vào ô tìm kiếm, `Ctrl+I` mở hoặc đóng bảng thông tin.
+
+![Bảng thông tin và thông báo nổi](img/gui-bang-thong-tin.png)
+
+## 8. Gõ lệnh trong ô nhập
 
 Ô nhập cũng nhận các lệnh của bản console, vẫn dùng được bình thường:
 
@@ -83,11 +92,11 @@ Giao diện Giáng sinh có nền xanh băng với hoa tuyết lặp lại; bong
 
 Đóng cửa sổ bằng nút X cũng thoát gọn chương trình.
 
-## 8. Cửa sổ nhỏ
+## 9. Cửa sổ nhỏ
 
 Cửa sổ có kích thước mặc định 960 x 640 và nhỏ nhất 640 x 440. Khi hẹp hơn 900 px, cột trái tự thu lại (250 px, rồi 220 px khi dưới 800 px) để khung chat luôn đủ rộng. Tên dài được rút bằng dấu ba chấm.
 
-## 9. Gặp sự cố
+## 10. Gặp sự cố
 
 | Hiện tượng | Cách xử lý |
 |---|---|

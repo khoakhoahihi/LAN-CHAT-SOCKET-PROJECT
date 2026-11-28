@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import queue
 import re
 import sys
@@ -12,15 +13,16 @@ from tkinter import filedialog
 from typing import NamedTuple
 
 from gui_chat import ConversationView, LogLine
-from gui_festive import GARLAND_HEIGHT, TILE, draw_garland, draw_snowman, draw_wallpaper
+from gui_info import INFO_WIDTH, InfoPanel, SharedFile
+from gui_festive import GARLAND_HEIGHT, TILE, draw_garland, draw_holly, draw_tree, draw_wallpaper
 from gui_shapes import draw_avatar, draw_circle, draw_presence_dot, draw_rounded, draw_rounded_border
 from gui_style import (
-    GARLAND_COLORS, LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, THEME_ORDER, THEMES,
+    LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, THEME_ORDER, THEMES,
     Fonts, classify, truncate_text,
 )
 from gui_widgets import (
-    SCROLL_W, IconButton, PillButton, PillInput, ProfileCard, SlimScrollbar,
-    paint_close, paint_file, paint_moon, paint_plus, paint_send, paint_snowflake, paint_sun,
+    SCROLL_W, IconButton, PillButton, PillInput, ProfileCard, SlimScrollbar, Toast,
+    paint_close, paint_file, paint_info, paint_moon, paint_plus, paint_send, paint_snowflake, paint_sun,
 )
 
 POLL_MS = 100
@@ -46,7 +48,9 @@ THEME_BUTTON = 36
 ACTION_SIZE = 34
 CHIP_H = 32
 CHIP_W = 124
-EMPTY_BLOCK_H = 200
+EMPTY_BLOCK_H = 250
+HOLLY_WIDTH = 46
+HOLLY_HEIGHT = 30
 INPUT_H = 40
 ATTACH_SIZE = 36
 CARD_H = 54
@@ -60,7 +64,10 @@ EMPTY_INPUT = "Select a chat to message..."
 
 THEME_ICONS = {"light": paint_moon, "dark": paint_snowflake, "christmas": paint_sun}
 
-TRANSFER_START = re.compile(r"(?:Sending|Receiving) (.+) \(.+\) \.\.\.")
+TRANSFER_START = re.compile(r"(?:Sending|Receiving) (.+) \((.+)\) \.\.\.")
+SENT_DONE = re.compile(r"Sent (.+) \.\.\. 100%  Done\.")
+RECEIVED_DONE = re.compile(r"Received (.+) -> (.+)")
+NEW_MESSAGE = re.compile(r"New message from (.+) \((\d+) unread\)")
 TRANSFER_STEP = re.compile(r"(.+)  (\d+)%")
 TRANSFER_DONE_PREFIXES = ("Sent ", "Received ")
 
@@ -74,8 +81,11 @@ class PeerRow(NamedTuple):
 
 
 class GuiTerminal:
-    def __init__(self, name: str, store: object, state: object, stop: threading.Event) -> None:
+    def __init__(
+        self, name: str, store: object, state: object, stop: threading.Event, downloads: str = "downloads",
+    ) -> None:
         self.name = name
+        self.downloads = downloads
         self.store = store
         self.state = state
         self.stop = stop
@@ -88,6 +98,9 @@ class GuiTerminal:
         self._signature: tuple = ()
         self._partner: object | None = None
         self._previews: dict[str, tuple[str, str]] = {}
+        self._pending_files: dict[str, str] = {}
+        self._outgoing_paths: dict[str, str] = {}
+        self._info_open = False
         self._hover_index: int | None = None
         self._status = "online"
         self._theme = "light"
@@ -107,10 +120,14 @@ class GuiTerminal:
         self.fonts = Fonts()
         self._build_side()
         self._build_chat()
+        self._build_info()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<Configure>", self._on_root_resize)
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.root.bind_all(sequence, self._wheel)
+        self.root.bind_all("<Escape>", self._on_escape)
+        self.root.bind_all("<Control-k>", self._on_search_shortcut)
+        self.root.bind_all("<Control-i>", self._on_info_shortcut)
         self._apply_theme()
 
     def say(self, text: str) -> None:
@@ -186,6 +203,19 @@ class GuiTerminal:
         self.side.pack(side="left", fill="y")
         self.side.pack_propagate(False)
 
+        brand = self._paint(tk.Frame(self.side, padx=SP_LG), bg="panel")
+        brand.pack(fill="x", pady=(SP_MD, 0))
+        self.brand_title = self._paint(
+            tk.Label(brand, text="Messages", font=self.fonts.title, anchor="w"), bg="panel", fg="text",
+        )
+        self.brand_title.pack(side="left")
+        self.brand_holly = self._paint(
+            tk.Canvas(brand, width=HOLLY_WIDTH, height=HOLLY_HEIGHT, highlightthickness=0, bd=0), bg="panel",
+        )
+        self.online_count = self._paint(
+            tk.Label(brand, text="0 online", font=self.fonts.sub, anchor="e"), bg="panel", fg="muted",
+        )
+        self.online_count.pack(side="right")
         top = self._paint(tk.Frame(self.side, height=HEADER_H, padx=SP_MD, pady=SP_MD), bg="panel")
         top.pack(fill="x")
         top.pack_propagate(False)
@@ -232,6 +262,8 @@ class GuiTerminal:
         self.view = ConversationView(self.chat_body, self.fonts, self._on_view_resize)
         self.view.pack(fill="both", expand=True)
         self._themed.append(self.view)
+        self.toast = Toast(self.chat_body, self.fonts, self._open_chat_named)
+        self._themed.append(self.toast)
         self.empty_hint = self._paint(
             tk.Label(self.chat_body, text=EMPTY_PROMPT, font=self.fonts.btn, anchor="center"), bg="bg", fg="subtle",
         )
@@ -274,9 +306,11 @@ class GuiTerminal:
         actions = self.header_actions
         self.close_button = IconButton(actions, ACTION_SIZE, paint_close, self._leave_chat, "surface", accent=False)
         self.file_action = IconButton(actions, ACTION_SIZE, paint_file, self._send_file, "surface", accent=False)
+        self.info_button = IconButton(actions, ACTION_SIZE, paint_info, self._toggle_info, "surface", accent=False)
         self.close_button.pack(side="right")
         self.file_action.pack(side="right", padx=(0, SP_XS))
-        self._themed.extend((self.file_action, self.close_button))
+        self.info_button.pack(side="right", padx=(0, SP_XS))
+        self._themed.extend((self.info_button, self.file_action, self.close_button))
 
     def _build_input(self) -> None:
         self.transfer = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_SM), bg="surface")
@@ -303,6 +337,40 @@ class GuiTerminal:
         self.send_button.set_enabled(False)
         self._themed.extend((self.file_button, self.input, self.send_button))
 
+    def _build_info(self) -> None:
+        self.info_frame = self._paint(tk.Frame(self.root, width=INFO_WIDTH + 1), bg="panel")
+        self.info_frame.pack_propagate(False)
+        self._hairline(self.info_frame, vertical=True, side="left", fill="y")
+        self.info = InfoPanel(self.info_frame, self.fonts, self.downloads)
+        self.info.pack(side="left", fill="both", expand=True)
+        self._themed.append(self.info)
+
+    def _toggle_info(self) -> None:
+        width, height = self.root.winfo_width(), self.root.winfo_height()
+        extra = INFO_WIDTH + 1
+        if self._info_open:
+            self.info_frame.pack_forget()
+            width -= extra
+        else:
+            self.info_frame.pack(side="right", fill="y", before=self.main)
+            width += extra
+        self._info_open = not self._info_open
+        self.root.geometry(f"{max(width, WINDOW_MIN_WIDTH)}x{height}")
+
+    def _on_escape(self, _event: object = None) -> None:
+        if self._partner is not None:
+            self._leave_chat()
+        elif self.search_entry.get():
+            self.search_entry.delete(0, "end")
+
+    def _on_search_shortcut(self, _event: object = None) -> str:
+        self._focus_search()
+        return "break"
+
+    def _on_info_shortcut(self, _event: object = None) -> str:
+        self._toggle_info()
+        return "break"
+
     def _apply_theme(self) -> None:
         self.palette = palette = THEMES[self._theme]
         for widget, mapping in self._paints:
@@ -325,13 +393,16 @@ class GuiTerminal:
     def _update_garland(self) -> None:
         if self.palette["flake"]:
             self.garland.pack(side="top", fill="x", before=self.header)
+            self.brand_holly.pack(side="left", padx=(SP_XS, 0), after=self.brand_title)
             self._draw_garland()
+            draw_holly(self.brand_holly, 8, 16)
         else:
             self.garland.pack_forget()
+            self.brand_holly.pack_forget()
 
     def _draw_garland(self) -> None:
         if self.palette["flake"]:
-            draw_garland(self.garland, max(self.garland.winfo_width(), 400), GARLAND_COLORS, self.palette["line"])
+            draw_garland(self.garland, max(self.garland.winfo_width(), 400), self.palette["surface"])
 
     def _toggle_theme(self) -> None:
         following = (THEME_ORDER.index(self._theme) + 1) % len(THEME_ORDER)
@@ -340,9 +411,10 @@ class GuiTerminal:
     def _on_root_resize(self, event: tk.Event) -> None:
         if event.widget is not self.root or event.width < 100:
             return
-        if event.width < NARROW_BELOW:
+        usable = event.width - (INFO_WIDTH + 1 if self._info_open else 0)
+        if usable < NARROW_BELOW:
             side_width = SIDE_NARROW
-        elif event.width < MID_BELOW:
+        elif usable < MID_BELOW:
             side_width = SIDE_MID
         else:
             side_width = SIDE_WIDE
@@ -395,11 +467,20 @@ class GuiTerminal:
         if text:
             self._in.put(text)
             self.entry.delete(0, "end")
+            if text.startswith("/send "):
+                self._remember_outgoing(text[6:].strip().strip("\"'"))
 
     def _send_file(self) -> None:
         path = filedialog.askopenfilename()
         if path:
             self._in.put(f"/send {path}")
+            self._remember_outgoing(path)
+
+    def _remember_outgoing(self, path: str) -> None:
+        self._outgoing_paths[os.path.basename(path)] = path
+
+    def _open_chat_named(self, name: str) -> None:
+        self._in.put(f"/chat {name}")
 
     def _open_chat(self, index: int) -> None:
         if 0 <= index < len(self._peer_names):
@@ -417,21 +498,36 @@ class GuiTerminal:
         self.search_entry.focus_set()
 
     def _consume_transfer_notice(self, kind: str, text: str) -> bool:
-        if kind == "info":
-            step = TRANSFER_STEP.fullmatch(text)
-            if step and self._transferring:
-                self.transfer_percent = int(step[2])
-                self._draw_transfer_card()
-                return True
-            start = TRANSFER_START.fullmatch(text)
-            if start:
-                self._begin_transfer(start[1])
-                return False
-            if text.startswith(TRANSFER_DONE_PREFIXES):
-                self._end_transfer()
-        elif kind == "error":
+        if kind == "error":
+            self._end_transfer()
+            return False
+        if kind != "info":
+            return False
+        step = TRANSFER_STEP.fullmatch(text)
+        if step and self._transferring:
+            self.transfer_percent = int(step[2])
+            self._draw_transfer_card()
+            return True
+        start = TRANSFER_START.fullmatch(text)
+        if start:
+            self._pending_files[start[1]] = start[2]
+            self._begin_transfer(start[1])
+            return False
+        self._record_finished_file(text)
+        if text.startswith(TRANSFER_DONE_PREFIXES):
             self._end_transfer()
         return False
+
+    def _record_finished_file(self, text: str) -> None:
+        stamp = time.strftime("%H:%M")
+        sent, received = SENT_DONE.fullmatch(text), RECEIVED_DONE.fullmatch(text)
+        if sent:
+            name = sent[1]
+            path = self._outgoing_paths.get(name, "")
+            self.info.add_file(SharedFile(name, "sent", self._pending_files.pop(name, ""), stamp, path))
+        elif received:
+            name = received[1]
+            self.info.add_file(SharedFile(name, "received", self._pending_files.pop(name, ""), stamp, received[2]))
 
     def _begin_transfer(self, filename: str) -> None:
         self._transfer_label = f"Transferring {filename}"
@@ -453,6 +549,7 @@ class GuiTerminal:
                 line = LogLine(kind, who, text, time.strftime("%H:%M"), time.time(), time.strftime("%Y-%m-%d"))
                 self.view.append(line)
                 self._remember_preview(line)
+                self._maybe_toast(line)
         self._sync_empty_view()
 
     def _remember_preview(self, line: LogLine) -> None:
@@ -461,6 +558,14 @@ class GuiTerminal:
             self._previews[line.who] = (first_line, line.stamp)
         elif line.kind == "mine" and self._partner is not None:
             self._previews[self._partner.name] = ("You: " + first_line, line.stamp)
+
+    def _maybe_toast(self, line: LogLine) -> None:
+        match = NEW_MESSAGE.fullmatch(line.text) if line.kind == "info" else None
+        if match is None:
+            return
+        peer = next((p for p in self.store.get_peers() if p.name == match[1]), None)
+        latest = self.state.latest_unread(peer.peer_id) if peer else None
+        self.toast.show(match[1], latest.text.split("\n")[0] if latest else "New message")
 
     def _refresh(self) -> None:
         query = self.search_entry.get().strip().lower()
@@ -482,6 +587,7 @@ class GuiTerminal:
         self._draw_peers()
         self._update_header(partner)
         self.search.draw()
+        self.online_count.configure(text=f"{len(self.store.get_peers())} online")
 
     def _peer_row(self, peer: object, current: str | None) -> PeerRow:
         latest = self.state.latest_unread(peer.peer_id)
@@ -541,9 +647,9 @@ class GuiTerminal:
         label = "99+" if unread > 99 else str(unread)
         left = right - max(BADGE_H, self.fonts.btn_bold.measure(label) + SP_MD)
         badge_top = centre_y - BADGE_H // 2
-        draw_rounded(canvas, left, badge_top, right, badge_top + BADGE_H, BADGE_H // 2, self.palette["accent"])
+        draw_rounded(canvas, left, badge_top, right, badge_top + BADGE_H, BADGE_H // 2, self.palette["badge"])
         canvas.create_text(
-            (left + right) // 2, centre_y, text=label, fill=self.palette["on_accent"], font=self.fonts.btn_bold,
+            (left + right) // 2, centre_y, text=label, fill=self.palette["on_badge"], font=self.fonts.btn_bold,
         )
         return left
 
@@ -563,6 +669,7 @@ class GuiTerminal:
             self.header_avatar.pack_forget()
             self.header_actions.pack_forget()
         self.partner.configure(text=title)
+        self.info.set_partner(partner)
         self.partner_sub.configure(text=truncate_text(subtitle, self.fonts.sub, available))
         self.input.dimmed = self._empty_visible
         self._sync_empty_view()
@@ -598,14 +705,14 @@ class GuiTerminal:
         top = max(height // 2 - EMPTY_BLOCK_H // 2, SP_LG)
         self._draw_illustration(canvas, centre, top)
         prompt = truncate_text(EMPTY_PROMPT, fonts.btn, max(width - 2 * SP_XL, 200))
-        canvas.create_text(centre, top + 100, text=EMPTY_TITLE, fill=palette["text"], font=fonts.empty_title)
-        canvas.create_text(centre, top + 124, text=prompt, fill=palette["muted"], font=fonts.btn)
-        canvas.create_window(centre, top + 148, window=self.empty_actions, anchor="n")
+        canvas.create_text(centre, top + 134, text=EMPTY_TITLE, fill=palette["text"], font=fonts.empty_title)
+        canvas.create_text(centre, top + 158, text=prompt, fill=palette["muted"], font=fonts.btn)
+        canvas.create_window(centre, top + 182, window=self.empty_actions, anchor="n")
 
     def _draw_illustration(self, canvas: tk.Canvas, centre: int, top: int) -> None:
         palette = self.palette
         if palette["flake"]:
-            draw_snowman(canvas, centre, top, palette["accent"])
+            draw_tree(canvas, centre, top + 10)
             return
         draw_rounded(canvas, centre - 40, top + 8, centre + 24, top + 56, (16, 16, 16, 4), palette["selected"])
         draw_rounded(canvas, centre - 4, top + 40, centre + 40, top + 72, (12, 12, 4, 12), palette["chip"])

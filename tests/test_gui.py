@@ -286,7 +286,7 @@ class TestGuiTerminal(unittest.TestCase):
             seen.append(window._theme)
         self.assertEqual(seen, ["dark", "christmas", "light"])
 
-    def test_christmas_theme_adds_snowflake_wallpaper_and_garland(self) -> None:
+    def test_christmas_theme_adds_wallpaper_garland_and_holly(self) -> None:
         window = self.open([ALICE])
         window.say("[Alice] hello")
         window._drain()
@@ -301,6 +301,118 @@ class TestGuiTerminal(unittest.TestCase):
         window.set_theme("light")
         self.assertEqual(window.view.canvas.find_withtag("wallpaper"), ())
         self.assertEqual(window.garland.winfo_manager(), "")
+
+    def test_sidebar_header_counts_online_people(self) -> None:
+        window = self.open([ALICE, BOB])
+        window._refresh()
+        self.assertEqual(window.online_count.cget("text"), "2 online")
+
+    def test_escape_leaves_the_chat_then_clears_the_search(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window._on_escape()
+        self.assertEqual(next(window.lines()), "/leave")
+        window.state.leave()
+        window._refresh()
+        window.search_entry.insert(0, "zz")
+        window._on_escape()
+        self.assertEqual(window.search_entry.get(), "")
+
+    def test_ctrl_k_shortcut_is_handled(self) -> None:
+        window = self.open()
+        self.assertEqual(window._on_search_shortcut(), "break")
+        self.assertEqual(window._on_info_shortcut(), "break")
+
+    def test_copy_line_puts_the_message_on_the_clipboard(self) -> None:
+        window = self.open([ALICE])
+        window.say("[Alice] copy me")
+        window._drain()
+        window.view.copy_line(0)
+        self.assertEqual(window.root.clipboard_get(), "copy me")
+
+    def test_line_at_finds_the_message_under_the_pointer(self) -> None:
+        window = self.open([ALICE])
+        window.say("[Alice] hello")
+        window.say("[Me] there")
+        window._drain()
+        window.root.update()
+        canvas = window.view.canvas
+        for index, expected in ((0, "hello"), (1, "there")):
+            item = next(
+                i for i in canvas.find_withtag(f"block{index}")
+                if canvas.type(i) == "text" and canvas.itemcget(i, "text") == expected
+            )
+            left, top, right, bottom = canvas.bbox(item)
+            x = (left + right) / 2 - canvas.canvasx(0)
+            y = (top + bottom) / 2 - canvas.canvasy(0)
+            self.assertEqual(window.view.line_at(x, y), index)
+
+    def test_new_message_notice_raises_a_clickable_toast(self) -> None:
+        window = self.open([ALICE])
+        window.state.add_message(ALICE.peer_id, "Alice", "hi toast")
+        window.say("[*] New message from Alice (1 unread)")
+        window._drain()
+        self.assertEqual((window.toast.name, window.toast.text), ("Alice", "hi toast"))
+        self.assertEqual(window.toast.winfo_manager(), "place")
+        window.toast._clicked(None)
+        self.assertEqual(next(window.lines()), "/chat Alice")
+        self.assertEqual(window.toast.winfo_manager(), "")
+
+    def test_info_panel_lists_sent_and_received_files(self) -> None:
+        window = self.open()
+        for line in (
+            "[*] Sending a.bin (1.0 MB) ...", "[*] a.bin  50%", "[*] Sent a.bin ... 100%  Done.",
+            "[*] Receiving b.txt (2.0 KB) ...", "[*] Received b.txt -> C:/dl/b.txt",
+        ):
+            window.say(line)
+        window._drain()
+        shown = [(f.name, f.direction, f.size, f.path) for f in window.info.files]
+        self.assertEqual(shown, [("a.bin", "sent", "1.0 MB", ""), ("b.txt", "received", "2.0 KB", "C:/dl/b.txt")])
+
+    def test_sent_file_remembers_its_local_path(self) -> None:
+        window = self.open()
+        window.entry.insert(0, "/send C:/x/y.txt")
+        window._submit()
+        window.say("[*] Sending y.txt (3 B) ...")
+        window.say("[*] Sent y.txt ... 100%  Done.")
+        window._drain()
+        self.assertEqual(window.info.files[0].path, "C:/x/y.txt")
+
+    def test_info_button_toggles_the_panel_and_widens_the_window(self) -> None:
+        window = self.open([ALICE])
+        window.root.update()
+        before = window.root.winfo_width()
+        window._toggle_info()
+        window.root.update()
+        self.assertEqual(window.info_frame.winfo_manager(), "pack")
+        self.assertGreaterEqual(window.root.winfo_width(), before + 250)
+        window._toggle_info()
+        window.root.update()
+        self.assertEqual(window.info_frame.winfo_manager(), "")
+        self.assertLessEqual(abs(window.root.winfo_width() - before), 4)
+
+    def test_header_info_button_opens_and_closes_the_panel(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.info_button.command()
+        self.assertEqual(window.info_frame.winfo_manager(), "pack")
+        window.info_button.command()
+        self.assertEqual(window.info_frame.winfo_manager(), "")
+
+    def test_info_panel_shows_the_partner_and_opens_folders(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.say("[*] Received b.txt -> C:/dl/b.txt")
+        window._drain()
+        self.assertEqual(window.info.partner.name, "Alice")
+        opened = []
+        with patch("gui_info.open_folder", side_effect=opened.append):
+            for _top, _bottom, action in window.info._regions:
+                action()
+        self.assertEqual(opened, ["C:/dl/b.txt", "downloads"])
 
     def test_closing_the_window_sets_stop(self) -> None:
         from gui import GuiTerminal

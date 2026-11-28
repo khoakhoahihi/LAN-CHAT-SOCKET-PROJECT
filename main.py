@@ -46,7 +46,7 @@ def main() -> None:
     if args.gui:
         from gui import GuiTerminal
 
-        window = GuiTerminal(args.name, store, state, stop)
+        window = GuiTerminal(args.name, store, state, stop, args.downloads)
 
     def on_file(sock, peer_id, peer_name):
         receive_file(sock, peer_id, peer_name, events, args.downloads)

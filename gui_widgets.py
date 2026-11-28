@@ -14,6 +14,11 @@ THUMB_INSET = 2
 FIELD_INSET = 2
 MIN_ENTRY_WIDTH = 40
 MIN_BUTTON_WIDTH = 60
+TOAST_WIDTH = 300
+TOAST_HEIGHT = 62
+TOAST_AVATAR = 36
+TOAST_MS = 5000
+TOAST_RADIUS = 14
 
 IconPainter = Callable[[tk.Canvas, int, int, str, str], None]
 
@@ -54,6 +59,12 @@ def paint_snowflake(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) 
         angle = arm * math.pi / 3
         dx, dy = 8 * math.cos(angle), 8 * math.sin(angle)
         canvas.create_line(cx - dx, cy - dy, cx + dx, cy + dy, fill=color, width=1.6, capstyle="round")
+
+
+def paint_info(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
+    canvas.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, outline=color, width=1.6)
+    canvas.create_line(cx, cy - 1, cx, cy + 4, fill=color, width=2, capstyle="round")
+    canvas.create_line(cx, cy - 4, cx, cy - 3, fill=color, width=2, capstyle="round")
 
 
 RAY_DIRECTIONS = ((0, -1), (0, 1), (-1, 0), (1, 0), (-0.7, -0.7), (0.7, -0.7), (-0.7, 0.7), (0.7, 0.7))
@@ -356,3 +367,58 @@ class ProfileCard(_PressableCanvas):
         self.create_text(
             text_x, self.height // 2 + 9, text=status, anchor="w", fill=palette["muted"], font=fonts.sub,
         )
+
+
+class Toast(tk.Canvas):
+    def __init__(self, parent: tk.Misc, fonts: Fonts, on_click: Callable[[str], None]) -> None:
+        super().__init__(parent, width=TOAST_WIDTH, height=TOAST_HEIGHT, highlightthickness=0, bd=0, cursor="hand2")
+        self.fonts = fonts
+        self.on_click = on_click
+        self.palette = LIGHT
+        self.name = ""
+        self.text = ""
+        self._job: str | None = None
+        self.bind("<Button-1>", self._clicked)
+
+    def apply_palette(self, palette: dict[str, str]) -> None:
+        self.palette = palette
+        self.configure(bg=palette["bg"])
+        self.draw()
+
+    def show(self, name: str, text: str) -> None:
+        self.name = name
+        self.text = text
+        self.draw()
+        self.place(relx=1.0, x=-SP_LG, y=SP_MD, anchor="ne")
+        self.tk.call("raise", str(self))
+        self._cancel()
+        self._job = self.after(TOAST_MS, self.hide)
+
+    def hide(self) -> None:
+        self._cancel()
+        self.place_forget()
+
+    def draw(self) -> None:
+        palette, fonts = self.palette, self.fonts
+        self.delete("all")
+        draw_rounded_border(self, 0, 0, TOAST_WIDTH, TOAST_HEIGHT, TOAST_RADIUS, palette["surface"], palette["line"])
+        draw_avatar(self, SP_MD, (TOAST_HEIGHT - TOAST_AVATAR) // 2, TOAST_AVATAR, self.name or "?", fonts.bold)
+        text_x = SP_MD + TOAST_AVATAR + SP_MD
+        room = TOAST_WIDTH - text_x - SP_MD
+        name = truncate_text(self.name, fonts.bold, room)
+        body = truncate_text(self.text, fonts.sub, room)
+        self.create_text(text_x, 22, text=name, anchor="w", fill=palette["text"], font=fonts.bold)
+        self.create_text(text_x, 42, text=body, anchor="w", fill=palette["muted"], font=fonts.sub)
+
+    def _cancel(self) -> None:
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+
+    def _clicked(self, _event: tk.Event) -> None:
+        name = self.name
+        self.hide()
+        self.on_click(name)
