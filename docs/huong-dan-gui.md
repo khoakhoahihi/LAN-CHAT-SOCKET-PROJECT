@@ -25,7 +25,7 @@ Cần `tkinter`. Windows và macOS đã có sẵn. Ubuntu cài thêm: `sudo apt 
 |---|---|
 | Cột trái, trên cùng | Ô **Search**: gõ để lọc danh sách theo tên |
 | Cột trái, giữa | Người đang online: avatar màu, tên, tin cuối kèm giờ (chưa có tin thì hiện trạng thái), chấm xanh (online) hoặc cam (away), huy hiệu số tin chưa đọc |
-| Cột trái, dưới cùng | Thẻ hồ sơ của bạn (avatar, tên, trạng thái; bấm vào để đổi `online`/`away`) và nút mặt trăng hoặc mặt trời (đổi sáng/tối) |
+| Cột trái, dưới cùng | Thẻ hồ sơ của bạn (avatar, tên, trạng thái; bấm vào để đổi `online`/`away`) và nút icon đổi giao diện (sáng, tối, Giáng sinh) |
 | Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ; bên phải là nút gửi file và nút đóng cuộc chat |
 | Khung giữa | Hội thoại: tin nhắn dạng bong bóng (ít tin thì nằm sát ô nhập) và các thông báo của chương trình. Chưa chọn ai thì hiện ba gợi ý nhanh: tìm người, đổi trạng thái, đổi giao diện |
 | Hàng dưới cùng | Nút **+** gửi file, ô nhập tin, nút gửi |
@@ -59,9 +59,13 @@ Bên nhận: file lưu vào thư mục `downloads/` (hoặc thư mục đặt b�
 ## 6. Trạng thái và giao diện
 
 - **Thẻ hồ sơ của bạn**: bấm để đổi giữa Online và Away, những người khác thấy sau khoảng 1 giây (chấm đổi màu).
-- **Nút mặt trăng, mặt trời**: bấm để đổi giao diện sáng hoặc tối, hội thoại đang có được giữ nguyên.
+- **Nút icon ở chân cột trái**: bấm để chuyển vòng sáng, tối, Giáng sinh (icon cho biết giao diện kế tiếp), hội thoại đang có được giữ nguyên.
 
 ![Giao diện tối](img/gui-toi.png)
+
+Giao diện Giáng sinh có nền xanh băng với hoa tuyết lặp lại; bong bóng và chữ nằm trên mặt phẳng đặc nên vẫn dễ đọc.
+
+![Giao diện Giáng sinh](img/gui-giang-sinh.png)
 
 ## 7. Gõ lệnh trong ô nhập
 

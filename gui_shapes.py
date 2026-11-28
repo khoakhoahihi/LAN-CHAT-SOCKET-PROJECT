@@ -4,6 +4,7 @@ import base64
 import struct
 import tkinter as tk
 import zlib
+from collections.abc import Callable
 from functools import lru_cache
 
 from gui_style import AVATAR_COLORS
@@ -58,6 +59,17 @@ def _to_image(widget: tk.Misc, coverage: tuple[tuple[int, ...], ...], color: str
         for alpha in row:
             pixels += bytes((red, green, blue, alpha))
     return tk.PhotoImage(master=widget, data=base64.b64encode(_png(width, height, bytes(pixels))))
+
+
+def coverage_image(widget: tk.Misc, coverage: tuple[tuple[int, ...], ...], color: str) -> tk.PhotoImage:
+    return _to_image(widget, coverage, color)
+
+
+def cached_image(widget: tk.Misc, key: tuple, build: Callable[[], tk.PhotoImage]) -> tk.PhotoImage:
+    cache = _image_cache(widget)
+    if key not in cache:
+        cache[key] = build()
+    return cache[key]
 
 
 def circle_image(widget: tk.Misc, diameter: int, color: str) -> tk.PhotoImage:

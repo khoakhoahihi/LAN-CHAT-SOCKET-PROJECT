@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from chat_state import ChatState
-from gui_widgets import paint_sun
+from gui_widgets import paint_snowflake
 from peer_store import Peer
 
 class QuietTk(tk.Tk):
@@ -57,15 +57,6 @@ class TestGuiTerminal(unittest.TestCase):
         self.addCleanup(window.root.destroy)
         return window
 
-    def windows(self, window) -> int:
-        return len(window.view.bubbles())
-
-    def bubble_widgets(self, window) -> list[tk.Canvas]:
-        return window.view.bubbles()
-
-    def bubble_texts(self, canvas: tk.Canvas) -> list[str]:
-        return [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
-
     def texts(self, window) -> list[str]:
         canvas = window.peers
         return [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
@@ -75,18 +66,21 @@ class TestGuiTerminal(unittest.TestCase):
         for line in ("[Alice] hello", "[Me] hi there", "[*] Alice is online", "[!] boom"):
             window.say(line)
         window._drain()
-        self.assertEqual(self.windows(window), 2)
-        self.assertIn("Alice is online", window.log.get("1.0", "end"))
-        self.assertTrue(window.log.tag_ranges("mine"))
-        self.assertTrue(window.log.tag_ranges("other"))
-        self.assertTrue(window.log.tag_ranges("info"))
-        self.assertTrue(window.log.tag_ranges("error"))
+        self.assertEqual(window.message_texts(), ["hello", "hi there"])
+        shown = window.log_text()
+        self.assertIn("Alice is online", shown)
+        self.assertIn("boom", shown)
+        canvas = window.view.canvas
+        colors = {canvas.itemcget(i, "fill") for i in canvas.find_all() if canvas.type(i) == "text"}
+        self.assertIn(window.palette["error"], colors)
+        self.assertIn(window.palette["subtle"], colors)
 
     def test_multiline_say_is_split_into_separate_entries(self) -> None:
         window = self.open()
         window.say("[*] 2 unread:\n[Alice] one\n[Alice] two")
         window._drain()
-        self.assertEqual(self.windows(window), 2)
+        self.assertEqual(window.message_texts(), ["one", "two"])
+        self.assertIn("2 unread:", window.log_text())
 
     def test_transfer_progress_bar_follows_the_notices(self) -> None:
         window = self.open()
@@ -96,11 +90,11 @@ class TestGuiTerminal(unittest.TestCase):
         window.say("[*] a.bin  40%")
         window._drain()
         self.assertEqual(window.transfer_percent, 40)
-        self.assertNotIn("40%", window.log.get("1.0", "end"))
+        self.assertNotIn("40%", window.log_text())
         window.say("[*] Sent a.bin ... 100%  Done.")
         window._drain()
         self.assertFalse(window._transferring)
-        self.assertIn("Done.", window.log.get("1.0", "end"))
+        self.assertIn("Done.", window.log_text())
 
     def test_error_ends_a_transfer(self) -> None:
         window = self.open()
@@ -223,9 +217,10 @@ class TestGuiTerminal(unittest.TestCase):
         window._drain()
         window.root.update()
         window.root.update()
-        self.assertGreater(window.view.spacer_height(), 100)
-        bubble = window.view.bubbles()[0]
-        self.assertGreater(window.log.bbox(window.log.index("end-2c"))[1], window.log.winfo_height() // 2)
+        canvas = window.view.canvas
+        self.assertGreater(window.view.anchor_offset(), 100)
+        bottom = canvas.bbox("content")[3]
+        self.assertLessEqual(abs(canvas.winfo_height() - bottom), 24)
 
     def test_peer_statuses_report_what_the_sidebar_shows(self) -> None:
         window = self.open([ALICE, BOB])
@@ -257,9 +252,9 @@ class TestGuiTerminal(unittest.TestCase):
         light = window.palette["bg"]
         window._toggle_theme()
         self.assertNotEqual(window.palette["bg"], light)
-        self.assertEqual(window.root.cget("bg"), window.palette["bg"])
-        self.assertEqual(self.windows(window), 2)
-        self.assertIs(window.theme_button.icon, paint_sun)
+        self.assertEqual(window.root.cget("bg"), window.palette["surface"])
+        self.assertEqual(window.message_texts(), ["hello", "hi"])
+        self.assertIs(window.theme_button.icon, paint_snowflake)
 
     def test_inspection_hooks_report_what_is_on_screen(self) -> None:
         window = self.open([ALICE, BOB])
@@ -283,6 +278,30 @@ class TestGuiTerminal(unittest.TestCase):
         window.set_theme("light")
         self.assertEqual(window.palette["bg"], light)
 
+    def test_theme_button_cycles_light_dark_christmas(self) -> None:
+        window = self.open()
+        seen = []
+        for _ in range(3):
+            window._toggle_theme()
+            seen.append(window._theme)
+        self.assertEqual(seen, ["dark", "christmas", "light"])
+
+    def test_christmas_theme_adds_snowflake_wallpaper_and_garland(self) -> None:
+        window = self.open([ALICE])
+        window.say("[Alice] hello")
+        window._drain()
+        self.assertEqual(window.view.canvas.find_withtag("wallpaper"), ())
+        self.assertEqual(window.garland.winfo_manager(), "")
+        window.set_theme("christmas")
+        window.root.update()
+        self.assertTrue(window.view.canvas.find_withtag("wallpaper"))
+        self.assertTrue(window.peers.find_withtag("wallpaper"))
+        self.assertEqual(window.garland.winfo_manager(), "pack")
+        self.assertEqual(window.message_texts(), ["hello"])
+        window.set_theme("light")
+        self.assertEqual(window.view.canvas.find_withtag("wallpaper"), ())
+        self.assertEqual(window.garland.winfo_manager(), "")
+
     def test_closing_the_window_sets_stop(self) -> None:
         from gui import GuiTerminal
 
@@ -301,12 +320,11 @@ class TestGuiTerminal(unittest.TestCase):
             window.say("[Alice] two")
             window.say("[Alice] three")
             window._drain()
-        bubbles = self.bubble_widgets(window)
-        self.assertEqual(len(bubbles), 3)
-        self.assertEqual(self.bubble_texts(bubbles[0]), ["one", "Alice"])
-        self.assertEqual(self.bubble_texts(bubbles[1])[0], "two")
-        self.assertNotIn("Alice", self.bubble_texts(bubbles[1]))
-        self.assertIn("Alice", self.bubble_texts(bubbles[2]))
+        shown = [[t for t in window.view.message_items(i) if t != "Today"] for i in range(3)]
+        self.assertEqual(shown[0], ["one", "Alice"])
+        self.assertEqual(shown[1][0], "two")
+        self.assertNotIn("Alice", shown[1])
+        self.assertIn("Alice", shown[2])
 
     def test_date_label_today_appears_once_before_first_message(self) -> None:
         window = self.open([ALICE])
@@ -317,7 +335,6 @@ class TestGuiTerminal(unittest.TestCase):
         window.say("[Me] second")
         window._drain()
         self.assertEqual(window.view.date_chip_texts(), ["Today"])
-        self.assertTrue(window.log.tag_ranges("date"))
         self.assertIn("Today", window.log_text())
 
     def test_empty_state_shows_when_unselected_and_hides_when_selected(self) -> None:
@@ -374,12 +391,13 @@ class TestGuiTerminal(unittest.TestCase):
         window = self.open([ALICE])
         window.say("[Alice] hello")
         window._drain()
-        bubble = self.bubble_widgets(window)[0]
-        kinds = {bubble.type(i) for i in bubble.find_all()}
-        self.assertNotIn("polygon", kinds)
-        for item in bubble.find_all():
-            if bubble.type(item) == "rectangle":
-                self.assertEqual(bubble.itemcget(item, "outline"), "")
+        canvas = window.view.canvas
+        items = canvas.find_withtag("block0")
+        self.assertTrue(items)
+        self.assertNotIn("polygon", {canvas.type(i) for i in items})
+        for item in items:
+            if canvas.type(item) == "rectangle":
+                self.assertEqual(canvas.itemcget(item, "outline"), "")
 
     def test_send_button_is_dimmed_when_empty_and_active_when_filled(self) -> None:
         window = self.open([ALICE])

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import font as tkfont
@@ -46,6 +47,13 @@ def paint_file(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> No
 def paint_close(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
     canvas.create_line(cx - 5, cy - 5, cx + 5, cy + 5, fill=color, width=2, capstyle="round")
     canvas.create_line(cx - 5, cy + 5, cx + 5, cy - 5, fill=color, width=2, capstyle="round")
+
+
+def paint_snowflake(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
+    for arm in range(3):
+        angle = arm * math.pi / 3
+        dx, dy = 8 * math.cos(angle), 8 * math.sin(angle)
+        canvas.create_line(cx - dx, cy - dy, cx + dx, cy + dy, fill=color, width=1.6, capstyle="round")
 
 
 RAY_DIRECTIONS = ((0, -1), (0, 1), (-1, 0), (1, 0), (-0.7, -0.7), (0.7, -0.7), (-0.7, 0.7), (0.7, 0.7))
@@ -344,6 +352,7 @@ class ProfileCard(_PressableCanvas):
             text_x, self.height // 2 - 8, text=truncate_text(self.name, fonts.bold, room),
             anchor="w", fill=palette["text"], font=fonts.bold,
         )
+        status = self.status.capitalize()
         self.create_text(
-            text_x, self.height // 2 + 9, text=self.status.capitalize(), anchor="w", fill=palette["muted"], font=fonts.sub,
+            text_x, self.height // 2 + 9, text=status, anchor="w", fill=palette["muted"], font=fonts.sub,
         )

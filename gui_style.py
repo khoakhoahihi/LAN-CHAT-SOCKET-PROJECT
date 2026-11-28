@@ -24,6 +24,7 @@ STATUS_COLORS = {"online": "#30A46C", "away": "#F5A524"}
 
 LIGHT = {
     "bg": "#FFFFFF", "panel": "#F8F9FA", "text": "#1C2024", "muted": "#60646C", "subtle": "#8B8D98",
+    "surface": "#FFFFFF", "flake": "",
     "line": "#E6E8EB", "hover": "#EEF0F3", "selected": "#E6ECFE",
     "accent": "#3E63DD", "accent_hover": "#3558C9", "accent_press": "#2F4EB5", "on_accent": "#FFFFFF",
     "field": "#F1F3F5", "field_focus": "#FFFFFF", "ring": "#C7D4FB",
@@ -34,6 +35,7 @@ LIGHT = {
 }
 DARK = {
     "bg": "#111214", "panel": "#17181B", "text": "#ECEEF1", "muted": "#A1A6AE", "subtle": "#767B84",
+    "surface": "#111214", "flake": "",
     "line": "#26282D", "hover": "#202226", "selected": "#1E2A55",
     "accent": "#4C6BEB", "accent_hover": "#6382F0", "accent_press": "#3E5CD6", "on_accent": "#FFFFFF",
     "field": "#1F2125", "field_focus": "#17181B", "ring": "#2B3A78",
@@ -42,6 +44,21 @@ DARK = {
     "chip": "#212328", "chip_text": "#A1A6AE", "error": "#FF8589", "disabled": "#2A2D33",
     "scroll": "#3A3E46", "scroll_hover": "#565B66",
 }
+
+CHRISTMAS = {
+    "bg": "#D6EBFA", "panel": "#E9F4FC", "text": "#16304D", "muted": "#4F6E8E", "subtle": "#7F9BB8",
+    "surface": "#F2F9FE", "flake": "#FFFFFF",
+    "line": "#BDD9EE", "hover": "#D3E8F8", "selected": "#FFDAD6",
+    "accent": "#E53935", "accent_hover": "#D32F2F", "accent_press": "#B71C1C", "on_accent": "#FFFFFF",
+    "field": "#FFFFFF", "field_focus": "#FFFFFF", "ring": "#FFC4C0",
+    "mine": "#E53935", "mine_text": "#FFFFFF", "mine_time": "#FFD6D3",
+    "other": "#FFFFFF", "other_text": "#16304D", "other_time": "#7F9BB8",
+    "chip": "#FFE082", "chip_text": "#6B4F00", "error": "#C62828", "disabled": "#C5DBEC",
+    "scroll": "#A9C8E2", "scroll_hover": "#7FA8CC",
+}
+THEMES = {"light": LIGHT, "dark": DARK, "christmas": CHRISTMAS}
+THEME_ORDER = ("light", "dark", "christmas")
+GARLAND_COLORS = ("#E53935", "#43A047", "#FFC107", "#1E88E5")
 
 MESSAGE_LINE = re.compile(r"\[([^\]]+)\] (.*)", re.S)
 

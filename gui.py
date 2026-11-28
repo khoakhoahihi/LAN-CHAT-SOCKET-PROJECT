@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import queue
 import re
 import sys
@@ -11,13 +12,15 @@ from tkinter import filedialog
 from typing import NamedTuple
 
 from gui_chat import ConversationView, LogLine
+from gui_festive import GARLAND_HEIGHT, TILE, draw_garland, draw_snowman, draw_wallpaper
 from gui_shapes import draw_avatar, draw_circle, draw_presence_dot, draw_rounded, draw_rounded_border
 from gui_style import (
-    DARK, LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, Fonts, classify, truncate_text,
+    GARLAND_COLORS, LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, THEME_ORDER, THEMES,
+    Fonts, classify, truncate_text,
 )
 from gui_widgets import (
     SCROLL_W, IconButton, PillButton, PillInput, ProfileCard, SlimScrollbar,
-    paint_close, paint_file, paint_moon, paint_plus, paint_send, paint_sun,
+    paint_close, paint_file, paint_moon, paint_plus, paint_send, paint_snowflake, paint_sun,
 )
 
 POLL_MS = 100
@@ -43,7 +46,7 @@ THEME_BUTTON = 36
 ACTION_SIZE = 34
 CHIP_H = 32
 CHIP_W = 124
-EMPTY_ACTIONS_Y = 92
+EMPTY_BLOCK_H = 200
 INPUT_H = 40
 ATTACH_SIZE = 36
 CARD_H = 54
@@ -54,6 +57,8 @@ EMPTY_ART_H = 150
 EMPTY_TITLE = "No chat selected"
 EMPTY_PROMPT = "Select someone on the left to start chatting"
 EMPTY_INPUT = "Select a chat to message..."
+
+THEME_ICONS = {"light": paint_moon, "dark": paint_snowflake, "christmas": paint_sun}
 
 TRANSFER_START = re.compile(r"(?:Sending|Receiving) (.+) \(.+\) \.\.\.")
 TRANSFER_STEP = re.compile(r"(.+)  (\d+)%")
@@ -85,7 +90,7 @@ class GuiTerminal:
         self._previews: dict[str, tuple[str, str]] = {}
         self._hover_index: int | None = None
         self._status = "online"
-        self._dark = False
+        self._theme = "light"
         self._transferring = False
         self._transfer_label = ""
         self.transfer_percent = 0
@@ -128,7 +133,7 @@ class GuiTerminal:
         worker.join()
 
     def set_theme(self, name: str) -> None:
-        self._dark = name == "dark"
+        self._theme = name if name in THEMES else "light"
         self._apply_theme()
 
     def message_texts(self) -> list[str]:
@@ -197,6 +202,7 @@ class GuiTerminal:
         self.peers_scroll = SlimScrollbar(body, self.peers, "panel")
         self.peers_scroll.pack(side="right", fill="y")
         self.peers.pack(side="left", fill="both", expand=True)
+        self.peers.bind("<Configure>", lambda _event: self._draw_peers())
         self.peers.bind("<Button-1>", self._on_peer_click)
         self.peers.bind("<Motion>", self._on_peer_motion)
         self.peers.bind("<Leave>", self._on_peer_leave)
@@ -213,25 +219,25 @@ class GuiTerminal:
         self._hairline(self.root, vertical=True, side="left", fill="y")
 
     def _build_chat(self) -> None:
-        self.main = self._paint(tk.Frame(self.root), bg="bg")
+        self.main = self._paint(tk.Frame(self.root), bg="surface")
         self.main.pack(side="left", fill="both", expand=True)
+        garland = tk.Canvas(self.main, height=GARLAND_HEIGHT, highlightthickness=0, bd=0)
+        self.garland = self._paint(garland, bg="surface")
+        self.garland.bind("<Configure>", lambda _event: self._draw_garland())
         self._build_header()
         self._hairline(self.main, fill="x")
         self._build_input()
         self.chat_body = self._paint(tk.Frame(self.main), bg="bg")
         self.chat_body.pack(side="top", fill="both", expand=True)
         self.view = ConversationView(self.chat_body, self.fonts, self._on_view_resize)
-        self.log = self.view.text
         self.view.pack(fill="both", expand=True)
         self._themed.append(self.view)
         self.empty_hint = self._paint(
             tk.Label(self.chat_body, text=EMPTY_PROMPT, font=self.fonts.btn, anchor="center"), bg="bg", fg="subtle",
         )
-        self.empty_state = self._paint(tk.Frame(self.chat_body), bg="bg")
-        self.empty_art = self._paint(tk.Canvas(self.empty_state, highlightthickness=0, bd=0), bg="bg")
-        self.empty_art.place(relx=0.5, rely=0.5, anchor="center")
+        self.empty_state = self._paint(tk.Canvas(self.chat_body, highlightthickness=0, bd=0), bg="bg")
+        self.empty_state.bind("<Configure>", lambda _event: self._draw_empty_art())
         self.empty_actions = self._paint(tk.Frame(self.empty_state), bg="bg")
-        self.empty_actions.place(relx=0.5, rely=0.5, y=EMPTY_ACTIONS_Y, anchor="n")
         suggestions = (
             ("Find someone", self._focus_search),
             ("Change status", self._change_status),
@@ -245,64 +251,67 @@ class GuiTerminal:
             self._themed.append(chip)
 
     def _build_header(self) -> None:
-        header = self._paint(tk.Frame(self.main, height=HEADER_H, padx=SP_LG), bg="bg")
+        header = self._paint(tk.Frame(self.main, height=HEADER_H, padx=SP_LG), bg="surface")
+        self.header = header
         header.pack(fill="x")
         header.pack_propagate(False)
         self.header_avatar = self._paint(
-            tk.Canvas(header, width=AVATAR_SIZE + 2, height=AVATAR_SIZE + 2, highlightthickness=0, bd=0), bg="bg",
+            tk.Canvas(header, width=AVATAR_SIZE + 2, height=AVATAR_SIZE + 2, highlightthickness=0, bd=0), bg="surface",
         )
-        self.header_info = self._paint(tk.Frame(header), bg="bg")
+        self.header_info = self._paint(tk.Frame(header), bg="surface")
         self.header_info.pack(side="left", fill="x", expand=True, pady=(0, 2))
         self.partner = self._paint(
             tk.Label(self.header_info, text=EMPTY_TITLE, font=self.fonts.title, anchor="w", pady=0, bd=0),
-            bg="bg", fg="text",
+            bg="surface", fg="text",
         )
         self.partner.pack(fill="x")
         self.partner_sub = self._paint(
             tk.Label(self.header_info, text=EMPTY_PROMPT, font=self.fonts.sub, anchor="w", pady=0, bd=0),
-            bg="bg", fg="muted",
+            bg="surface", fg="muted",
         )
         self.partner_sub.pack(fill="x")
-        self.header_actions = self._paint(tk.Frame(header), bg="bg")
-        self.close_button = IconButton(self.header_actions, ACTION_SIZE, paint_close, self._leave_chat, "bg", accent=False)
-        self.file_action = IconButton(self.header_actions, ACTION_SIZE, paint_file, self._send_file, "bg", accent=False)
+        self.header_actions = self._paint(tk.Frame(header), bg="surface")
+        actions = self.header_actions
+        self.close_button = IconButton(actions, ACTION_SIZE, paint_close, self._leave_chat, "surface", accent=False)
+        self.file_action = IconButton(actions, ACTION_SIZE, paint_file, self._send_file, "surface", accent=False)
         self.close_button.pack(side="right")
         self.file_action.pack(side="right", padx=(0, SP_XS))
         self._themed.extend((self.file_action, self.close_button))
 
     def _build_input(self) -> None:
-        self.transfer = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_SM), bg="bg")
+        self.transfer = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_SM), bg="surface")
         self.transfer_card = self._paint(
-            tk.Canvas(self.transfer, height=CARD_H, highlightthickness=0, bd=0), bg="bg",
+            tk.Canvas(self.transfer, height=CARD_H, highlightthickness=0, bd=0), bg="surface",
         )
         self.transfer_card.pack(fill="x")
         self.transfer_card.bind("<Configure>", lambda _event: self._draw_transfer_card())
 
-        self.input_bar = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_MD), bg="bg")
+        self.input_bar = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_MD), bg="surface")
         self.input_bar.pack(side="bottom", fill="x")
         self._hairline(self.main, side="bottom", fill="x")
-        self.file_button = IconButton(self.input_bar, ATTACH_SIZE, paint_plus, self._send_file, "bg", accent=False)
+        self.file_button = IconButton(self.input_bar, ATTACH_SIZE, paint_plus, self._send_file, "surface", accent=False)
         self.file_button.pack(side="left", padx=(0, SP_SM))
         self.input = PillInput(
-            self.input_bar, INPUT_H, EMPTY_INPUT, self.fonts.body, SP_LG, False, self._on_input_change, "bg",
+            self.input_bar, INPUT_H, EMPTY_INPUT, self.fonts.body, SP_LG, False, self._on_input_change, "surface",
         )
         self.input.pack(side="left", fill="x", expand=True)
         self.entry = self.input.entry
         self.entry.bind("<Return>", self._submit)
         self.entry.bind("<KeyPress>", self._block_typing)
-        self.send_button = IconButton(self.input_bar, INPUT_H, paint_send, self._submit, "bg", accent=True)
+        self.send_button = IconButton(self.input_bar, INPUT_H, paint_send, self._submit, "surface", accent=True)
         self.send_button.pack(side="left", padx=(SP_SM, 0))
         self.send_button.set_enabled(False)
         self._themed.extend((self.file_button, self.input, self.send_button))
 
     def _apply_theme(self) -> None:
-        self.palette = palette = DARK if self._dark else LIGHT
+        self.palette = palette = THEMES[self._theme]
         for widget, mapping in self._paints:
             widget.configure(**{option: palette[key] for option, key in mapping.items()})
-        self.root.configure(bg=palette["bg"])
+        self.root.configure(bg=palette["surface"])
         for themed in self._themed:
             themed.apply_palette(palette)
         self._update_footer_buttons()
+        self._update_garland()
         if self._transferring:
             self._draw_transfer_card()
         self._signature = ()
@@ -310,11 +319,23 @@ class GuiTerminal:
 
     def _update_footer_buttons(self) -> None:
         self.profile.configure_content(self._status)
-        self.theme_button.icon = paint_sun if self._dark else paint_moon
+        self.theme_button.icon = THEME_ICONS[self._theme]
         self.theme_button.draw()
 
+    def _update_garland(self) -> None:
+        if self.palette["flake"]:
+            self.garland.pack(side="top", fill="x", before=self.header)
+            self._draw_garland()
+        else:
+            self.garland.pack_forget()
+
+    def _draw_garland(self) -> None:
+        if self.palette["flake"]:
+            draw_garland(self.garland, max(self.garland.winfo_width(), 400), GARLAND_COLORS, self.palette["line"])
+
     def _toggle_theme(self) -> None:
-        self.set_theme("light" if self._dark else "dark")
+        following = (THEME_ORDER.index(self._theme) + 1) % len(THEME_ORDER)
+        self.set_theme(THEME_ORDER[following])
 
     def _on_root_resize(self, event: tk.Event) -> None:
         if event.widget is not self.root or event.width < 100:
@@ -340,7 +361,7 @@ class GuiTerminal:
         if event.widget in (self.peers, self.peers_scroll):
             target, scrollable = self.peers, self.peers.yview() != (0.0, 1.0)
         else:
-            target, scrollable = self.log, self.empty_state.winfo_manager() != "place"
+            target, scrollable = self.view.canvas, self.empty_state.winfo_manager() != "place"
         if scrollable:
             target.yview_scroll(step * 2, "units")
 
@@ -448,7 +469,7 @@ class GuiTerminal:
         rows = [self._peer_row(peer, current) for peer in peers]
         partner = self.store.get(current) if current else None
         about = (partner.name, partner.status, partner.ip, partner.tcp_port) if partner else None
-        signature = (tuple(rows), about, self._dark, query)
+        signature = (tuple(rows), about, self._theme, query)
         if signature == self._signature:
             return
         was_empty = self._empty_visible
@@ -475,6 +496,10 @@ class GuiTerminal:
         canvas, palette = self.peers, self.palette
         canvas.delete("all")
         width = self._side_width - SCROLL_W
+        flake = palette["flake"]
+        if flake:
+            height = max(canvas.winfo_height(), len(self._rows) * ROW_HEIGHT)
+            draw_wallpaper(canvas, flake, 0, math.ceil(height / TILE), math.ceil(width / TILE))
         for index, row in enumerate(self._rows):
             top = index * ROW_HEIGHT
             if row.active:
@@ -483,7 +508,7 @@ class GuiTerminal:
                 background = palette["hover"]
             else:
                 background = palette["panel"]
-            if background != palette["panel"]:
+            if background != palette["panel"] or flake:
                 row_box = (ROW_INSET, top + 2, width - ROW_INSET, top + ROW_HEIGHT - 2)
                 draw_rounded(canvas, *row_box, ROW_RADIUS, background)
             self._draw_peer_row(canvas, row, top, width, background)
@@ -549,7 +574,7 @@ class GuiTerminal:
         draw_avatar(canvas, 0, 0, AVATAR_SIZE, partner.name, self.fonts.bold)
         corner = AVATAR_SIZE - DOT_SIZE
         color = STATUS_COLORS[partner.status]
-        draw_presence_dot(canvas, corner, corner, DOT_SIZE, color, self.palette["bg"])
+        draw_presence_dot(canvas, corner, corner, DOT_SIZE, color, self.palette["surface"])
 
     def _sync_empty_view(self) -> None:
         if not self._empty_visible:
@@ -564,25 +589,35 @@ class GuiTerminal:
             self._draw_empty_art()
 
     def _draw_empty_art(self) -> None:
-        canvas, palette, fonts = self.empty_art, self.palette, self.fonts
-        prompt = truncate_text(EMPTY_PROMPT, fonts.btn, max(self.view.width - 2 * SP_XL, 200))
-        width = max(fonts.empty_title.measure(EMPTY_TITLE), fonts.btn.measure(prompt)) + 2 * SP_XL
-        centre = width // 2
+        canvas, palette, fonts = self.empty_state, self.palette, self.fonts
+        width, height = max(canvas.winfo_width(), 1), max(canvas.winfo_height(), 1)
         canvas.delete("all")
-        canvas.configure(width=width, height=EMPTY_ART_H)
-        draw_rounded(canvas, centre - 40, 8, centre + 24, 56, (16, 16, 16, 4), palette["selected"])
-        draw_rounded(canvas, centre - 4, 40, centre + 40, 72, (12, 12, 4, 12), palette["chip"])
+        if palette["flake"]:
+            draw_wallpaper(canvas, palette["flake"], 0, math.ceil(height / TILE), math.ceil(width / TILE))
+        centre = width // 2
+        top = max(height // 2 - EMPTY_BLOCK_H // 2, SP_LG)
+        self._draw_illustration(canvas, centre, top)
+        prompt = truncate_text(EMPTY_PROMPT, fonts.btn, max(width - 2 * SP_XL, 200))
+        canvas.create_text(centre, top + 100, text=EMPTY_TITLE, fill=palette["text"], font=fonts.empty_title)
+        canvas.create_text(centre, top + 124, text=prompt, fill=palette["muted"], font=fonts.btn)
+        canvas.create_window(centre, top + 148, window=self.empty_actions, anchor="n")
+
+    def _draw_illustration(self, canvas: tk.Canvas, centre: int, top: int) -> None:
+        palette = self.palette
+        if palette["flake"]:
+            draw_snowman(canvas, centre, top, palette["accent"])
+            return
+        draw_rounded(canvas, centre - 40, top + 8, centre + 24, top + 56, (16, 16, 16, 4), palette["selected"])
+        draw_rounded(canvas, centre - 4, top + 40, centre + 40, top + 72, (12, 12, 4, 12), palette["chip"])
         for offset in (-24, -12, 0):
-            draw_circle(canvas, centre + offset - 3, 29, 6, palette["accent"])
-        canvas.create_text(centre, 100, text=EMPTY_TITLE, fill=palette["text"], font=fonts.empty_title)
-        canvas.create_text(centre, 124, text=prompt, fill=palette["muted"], font=fonts.btn)
+            draw_circle(canvas, centre + offset - 3, top + 26, 6, palette["accent"])
 
     def _draw_transfer_card(self) -> None:
         canvas, palette, fonts = self.transfer_card, self.palette, self.fonts
         width = max(canvas.winfo_width(), 240)
         percent = max(0, min(100, self.transfer_percent))
         canvas.delete("all")
-        draw_rounded_border(canvas, 0, 0, width, CARD_H, CARD_RADIUS, palette["bg"], palette["line"])
+        draw_rounded_border(canvas, 0, 0, width, CARD_H, CARD_RADIUS, palette["surface"], palette["line"])
         percent_label = f"{percent}%"
         room = width - 2 * SP_LG - fonts.btn_bold.measure(percent_label) - SP_SM
         label = truncate_text(self._transfer_label, fonts.btn_bold, max(room, 60))

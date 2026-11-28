@@ -50,9 +50,10 @@ Thêm `--gui` để dùng cửa sổ thay cho console. Lõi chương trình gi�
 python main.py --name Quan --gui
 ```
 
-- Cột trái: ô tìm kiếm lọc theo tên, rồi danh sách người đang online với avatar màu, chấm trạng thái (xanh là online, cam là away), tin cuối kèm giờ và huy hiệu số tin chưa đọc. Chân cột là thẻ hồ sơ của bạn (bấm để đổi `online`/`away`) và nút mặt trăng, mặt trời đổi giao diện. Bấm vào một người để mở chat; người đang chat được tô nền chàm nhạt và hiện tên ở thanh tiêu đề. Cột trái tự thu hẹp khi cửa sổ hẹp.
+- Cột trái: ô tìm kiếm lọc theo tên, rồi danh sách người đang online với avatar màu, chấm trạng thái (xanh là online, cam là away), tin cuối kèm giờ và huy hiệu số tin chưa đọc. Chân cột là thẻ hồ sơ của bạn (bấm để đổi `online`/`away`) và nút icon đổi giao diện. Bấm vào một người để mở chat; người đang chat được tô nền chàm nhạt và hiện tên ở thanh tiêu đề. Cột trái tự thu hẹp khi cửa sổ hẹp.
 - Khung chat: tin của mình là bong bóng chàm bên phải, tin của bạn màu xám nhạt bên trái, có giờ gửi; tin liên tiếp của cùng một người trong 5 phút được gộp nhóm. Thông báo hệ thống hiện ở giữa, lỗi màu đỏ, và vẫn hiện khi chưa chọn ai.
 - Gửi file có thanh tiến độ phía trên ô nhập. Nút `+` ở ô nhập và nút tài liệu ở thanh tiêu đề mở hộp chọn file, nút `x` ở thanh tiêu đề đóng cuộc chat.
+- Ba giao diện, đổi bằng nút icon ở chân cột trái (sáng, tối, Giáng sinh). Giáng sinh có nền xanh băng với hoa tuyết lặp lại, vòng đèn trên thanh tiêu đề và người tuyết ở trạng thái rỗng.
 - Hướng dẫn chi tiết từng thao tác, kèm ảnh: [`docs/huong-dan-gui.md`](docs/huong-dan-gui.md).
 - Cần `tkinter`, đã có sẵn trong Python trên Windows và macOS. Trên Ubuntu cài thêm: `sudo apt install python3-tk`.
 
@@ -121,7 +122,8 @@ lanchat/
 ├── cli.py             # dòng nhập, phân tích lệnh, hiển thị                (Người 3)
 ├── terminal.py        # đọc phím, vẽ lại dòng nhập khi có tin đến          (Người 3)
 ├── gui.py             # cửa sổ chính, nối giao diện với lõi lệnh của cli.py (Người 3)
-├── gui_chat.py        # khung hội thoại: bong bóng, gộp nhóm tin, nhãn ngày   (Người 3)
+├── gui_chat.py        # khung hội thoại vẽ bằng Canvas: bong bóng, nhóm tin   (Người 3)
+├── gui_festive.py     # hoa tuyết, vòng đèn, người tuyết của theme Giáng sinh (Người 3)
 ├── gui_widgets.py     # thanh cuộn, ô nhập, nút bấm tự vẽ                     (Người 3)
 ├── gui_shapes.py      # hình bo góc khử răng cưa (ảnh PNG sinh bằng zlib)     (Người 3)
 ├── gui_style.py       # bảng màu sáng và tối, font, hằng số kích thước        (Người 3)
