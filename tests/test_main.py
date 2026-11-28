@@ -8,6 +8,11 @@ MAIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 
 
 class TestMainArguments(unittest.TestCase):
+    def test_zero_udp_port_rejected_without_traceback(self) -> None:
+        result = self.run_main("--udp-port", "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+
     def run_main(self, *args: str) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as cwd:
             return subprocess.run(
