@@ -48,6 +48,16 @@ class TestGuiTerminal(unittest.TestCase):
     def windows(self, window) -> int:
         return sum(1 for item in window.log.dump("1.0", "end", window=True) if item[0] == "window")
 
+    def bubble_widgets(self, window) -> list[tk.Canvas]:
+        return [
+            window.log.nametowidget(item[1])
+            for item in window.log.dump("1.0", "end", window=True)
+            if item[0] == "window"
+        ]
+
+    def bubble_texts(self, canvas: tk.Canvas) -> list[str]:
+        return [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
+
     def texts(self, window) -> list[str]:
         canvas = window.peers
         return [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
@@ -168,6 +178,28 @@ class TestGuiTerminal(unittest.TestCase):
         self.assertEqual(self.windows(window), 2)
         self.assertEqual(window.theme_button.cget("text"), "Light mode")
 
+    def test_inspection_hooks_report_what_is_on_screen(self) -> None:
+        window = self.open([ALICE, BOB])
+        window.state.switch_to(BOB.peer_id)
+        for line in ("[Alice] hello", "[Me] hi", "[*] Sending a.bin (1.0 MB) ...", "[!] boom"):
+            window.say(line)
+        window._drain()
+        window._refresh()
+        self.assertEqual(window.message_texts(), ["hello", "hi"])
+        self.assertIn("Alice", window.sidebar_texts())
+        self.assertEqual(window.partner_title(), "Bob")
+        self.assertFalse(window.transfer_active())
+        self.assertIn("boom", window.log_text())
+
+    def test_set_theme_switches_to_the_named_theme(self) -> None:
+        window = self.open()
+        window.set_theme("light")
+        light = window.palette["bg"]
+        window.set_theme("dark")
+        self.assertNotEqual(window.palette["bg"], light)
+        window.set_theme("light")
+        self.assertEqual(window.palette["bg"], light)
+
     def test_closing_the_window_sets_stop(self) -> None:
         from gui import GuiTerminal
 
@@ -177,6 +209,115 @@ class TestGuiTerminal(unittest.TestCase):
             self.skipTest("no display available")
         window._close()
         self.assertTrue(window.stop.is_set())
+
+    def test_consecutive_messages_group_within_five_minutes_and_split_after(self) -> None:
+        window = self.open([ALICE])
+        with patch("gui.time.time", side_effect=[1000.0, 1060.0, 1400.0]):
+            window.say("[Alice] one")
+            window.say("[Alice] two")
+            window.say("[Alice] three")
+            window._drain()
+        bubbles = self.bubble_widgets(window)
+        self.assertEqual(len(bubbles), 3)
+        self.assertEqual(self.bubble_texts(bubbles[0]), ["one", "Alice"])
+        self.assertEqual(self.bubble_texts(bubbles[1])[0], "two")
+        self.assertNotIn("Alice", self.bubble_texts(bubbles[1]))
+        self.assertIn("Alice", self.bubble_texts(bubbles[2]))
+
+    def test_date_label_today_appears_once_before_first_message(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.say("[*] Connected to Alice")
+        window.say("[Alice] first")
+        window.say("[Me] second")
+        window._drain()
+        raw = window.log.get("1.0", "end")
+        self.assertEqual(raw.count("Today"), 1)
+        self.assertTrue(window.log.tag_ranges("date"))
+        self.assertIn("Today", window.log_text())
+
+    def test_empty_state_shows_when_unselected_and_hides_when_selected(self) -> None:
+        window = self.open([ALICE])
+        window._refresh()
+        self.assertTrue(window._empty_visible)
+        self.assertEqual(window.empty_state.winfo_manager(), "place")
+        self.assertIn("Select", window.log_text())
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        self.assertFalse(window._empty_visible)
+        self.assertEqual(window.empty_state.winfo_manager(), "")
+        window.state.leave()
+        window._refresh()
+        self.assertTrue(window._empty_visible)
+        self.assertEqual(window.empty_state.winfo_manager(), "place")
+
+    def test_notices_remain_visible_in_empty_state_and_log_text(self) -> None:
+        window = self.open([ALICE])
+        window._refresh()
+        window.say("[*] Quan is online")
+        window.say("[*] New message from Quan (1 unread)")
+        window.say("[!] Minh is offline")
+        window._drain()
+        self.assertEqual(window.empty_state.winfo_manager(), "")
+        self.assertEqual(window.empty_hint.winfo_manager(), "pack")
+        text = window.log_text()
+        self.assertIn("Quan is online", text)
+        self.assertIn("New message from Quan (1 unread)", text)
+        self.assertIn("Minh is offline", text)
+
+    def test_sidebar_shrinks_on_narrow_window(self) -> None:
+        nhung = Peer("33333333", "NguyenThiHongNhung", "10.0.0.4", 5003, "online", 0.0)
+        window = self.open([ALICE, nhung])
+        window.root.geometry("720x520")
+        window.root.update()
+        self.assertEqual(window._side_width, 220)
+        self.assertGreaterEqual(window.main.winfo_width(), 480)
+        self.assertTrue(any(text.endswith("...") for text in window.sidebar_texts()))
+        window.root.geometry("960x640")
+        window.root.update()
+        self.assertEqual(window._side_width, 300)
+
+    def test_long_peer_name_is_truncated_with_ellipsis(self) -> None:
+        long_name = "NguyenThiHongNhungWithAVeryLongDisplayName"
+        long_peer = Peer("33333333", long_name, "10.0.0.4", 5003, "online", 0.0)
+        window = self.open([long_peer])
+        window._refresh()
+        shown = window.sidebar_texts()
+        self.assertNotIn(long_name, shown)
+        self.assertTrue(any(text.endswith("...") for text in shown))
+
+    def test_bubbles_and_controls_have_no_black_outline(self) -> None:
+        window = self.open([ALICE])
+        window.say("[Alice] hello")
+        window._drain()
+        bubble = self.bubble_widgets(window)[0]
+        polys = [i for i in bubble.find_all() if bubble.type(i) == "polygon"]
+        self.assertEqual(bubble.itemcget(polys[0], "outline"), "")
+
+    def test_send_button_is_dimmed_when_empty_and_active_when_filled(self) -> None:
+        window = self.open([ALICE])
+        self.assertFalse(window._send_active)
+        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["dim"])
+        window.entry.insert(0, "   ")
+        self.assertFalse(window._send_active)
+        window.entry.delete(0, "end")
+        window.entry.insert(0, "hello")
+        self.assertTrue(window._send_active)
+        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["accent"])
+        window._submit()
+        self.assertFalse(window._send_active)
+        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["dim"])
+
+    def test_search_filters_peers_and_open_chat_uses_visible_list(self) -> None:
+        window = self.open([ALICE, BOB])
+        window._refresh()
+        window.search_entry.insert(0, "bob")
+        shown = window.sidebar_texts()
+        self.assertIn("Bob", shown)
+        self.assertNotIn("Alice", shown)
+        window._open_chat(0)
+        self.assertEqual(next(window.lines()), "/chat Bob")
 
 
 if __name__ == "__main__":
