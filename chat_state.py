@@ -30,6 +30,11 @@ class ChatState:
         with self._lock:
             return len(self._unread.get(peer_id, []))
 
+    def latest_unread(self, peer_id: str) -> Message | None:
+        with self._lock:
+            unread = self._unread.get(peer_id)
+            return unread[-1] if unread else None
+
     def leave(self) -> None:
         with self._lock:
             self.current = None

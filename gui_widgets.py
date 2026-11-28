@@ -4,8 +4,8 @@ import tkinter as tk
 from collections.abc import Callable
 from tkinter import font as tkfont
 
-from gui_shapes import draw_circle, draw_rounded, draw_rounded_border
-from gui_style import LIGHT, SP_LG, SP_MD, SP_SM, truncate_text
+from gui_shapes import draw_avatar, draw_circle, draw_presence_dot, draw_rounded, draw_rounded_border
+from gui_style import LIGHT, SP_LG, SP_MD, SP_SM, STATUS_COLORS, Fonts, truncate_text
 
 SCROLL_W = 8
 MIN_THUMB = 24
@@ -35,6 +35,17 @@ def paint_search(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> 
 def paint_moon(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
     draw_circle(canvas, cx - 6, cy - 6, 12, color)
     draw_circle(canvas, cx - 2, cy - 8, 11, fill)
+
+
+def paint_file(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
+    outline = (cx - 5, cy - 7, cx + 2, cy - 7, cx + 6, cy - 3, cx + 6, cy + 7, cx - 5, cy + 7)
+    canvas.create_polygon(outline, fill="", outline=color, width=1.6, joinstyle="round")
+    canvas.create_line(cx + 2, cy - 7, cx + 2, cy - 3, cx + 6, cy - 3, fill=color, width=1.6, joinstyle="round")
+
+
+def paint_close(canvas: tk.Canvas, cx: int, cy: int, color: str, fill: str) -> None:
+    canvas.create_line(cx - 5, cy - 5, cx + 5, cy + 5, fill=color, width=2, capstyle="round")
+    canvas.create_line(cx - 5, cy + 5, cx + 5, cy - 5, fill=color, width=2, capstyle="round")
 
 
 RAY_DIRECTIONS = ((0, -1), (0, 1), (-1, 0), (1, 0), (-0.7, -0.7), (0.7, -0.7), (-0.7, 0.7), (0.7, 0.7))
@@ -299,3 +310,40 @@ class PillButton(_PressableCanvas):
             left += 12 + SP_SM
         label = truncate_text(self.text, self.font, width - left - SP_MD)
         self.create_text(left, middle, text=label, anchor="w", fill=palette["text"], font=self.font)
+
+
+class ProfileCard(_PressableCanvas):
+    def __init__(
+        self, parent: tk.Misc, name: str, height: int, fonts: Fonts, command: Callable[[], None], surface: str,
+    ) -> None:
+        super().__init__(parent, command, surface, width=MIN_BUTTON_WIDTH, height=height)
+        self.name = name
+        self.height = height
+        self.fonts = fonts
+        self.status = "online"
+
+    def configure_content(self, status: str) -> None:
+        self.status = status
+        self.draw()
+
+    def draw(self) -> None:
+        palette, fonts = self.palette, self.fonts
+        self.delete("all")
+        width = max(self.winfo_width(), MIN_BUTTON_WIDTH)
+        if self.pressed:
+            draw_rounded(self, 0, 0, width, self.height, 12, palette["line"])
+        elif self.hovered:
+            draw_rounded(self, 0, 0, width, self.height, 12, palette["hover"])
+        size = 34
+        x, y = SP_SM, (self.height - size) // 2
+        draw_avatar(self, x, y, size, self.name, fonts.bold)
+        draw_presence_dot(self, x + size - 9, y + size - 9, 9, STATUS_COLORS[self.status], palette[self.surface])
+        text_x = x + size + SP_SM
+        room = width - text_x - SP_SM
+        self.create_text(
+            text_x, self.height // 2 - 8, text=truncate_text(self.name, fonts.bold, room),
+            anchor="w", fill=palette["text"], font=fonts.bold,
+        )
+        self.create_text(
+            text_x, self.height // 2 + 9, text=self.status.capitalize(), anchor="w", fill=palette["muted"], font=fonts.sub,
+        )

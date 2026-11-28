@@ -24,10 +24,10 @@ Cần `tkinter`. Windows và macOS đã có sẵn. Ubuntu cài thêm: `sudo apt 
 | Khu vực | Nội dung |
 |---|---|
 | Cột trái, trên cùng | Ô **Search**: gõ để lọc danh sách theo tên |
-| Cột trái, giữa | Người đang online: avatar màu, tên, trạng thái, chấm xanh (online) hoặc cam (away), huy hiệu số tin chưa đọc |
-| Cột trái, dưới cùng | Nút trạng thái (hiện `Online` hoặc `Away`, bấm để đổi) và nút **Dark**/**Light** (đổi sáng/tối) |
-| Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ |
-| Khung giữa | Hội thoại: tin nhắn dạng bong bóng và các thông báo của chương trình |
+| Cột trái, giữa | Người đang online: avatar màu, tên, tin cuối kèm giờ (chưa có tin thì hiện trạng thái), chấm xanh (online) hoặc cam (away), huy hiệu số tin chưa đọc |
+| Cột trái, dưới cùng | Thẻ hồ sơ của bạn (avatar, tên, trạng thái; bấm vào để đổi `online`/`away`) và nút mặt trăng hoặc mặt trời (đổi sáng/tối) |
+| Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ; bên phải là nút gửi file và nút đóng cuộc chat |
+| Khung giữa | Hội thoại: tin nhắn dạng bong bóng (ít tin thì nằm sát ô nhập) và các thông báo của chương trình. Chưa chọn ai thì hiện ba gợi ý nhanh: tìm người, đổi trạng thái, đổi giao diện |
 | Hàng dưới cùng | Nút **+** gửi file, ô nhập tin, nút gửi |
 
 ## 3. Chat với một người
@@ -50,7 +50,7 @@ Tin liên tiếp của cùng một người trong vòng 5 phút được gộp t
 ## 5. Gửi file
 
 1. Chọn người cần gửi (phải đang chat với họ).
-2. Bấm nút **+** ở góc trái ô nhập, chọn file.
+2. Bấm nút **+** ở góc trái ô nhập (hoặc nút tài liệu ở thanh tiêu đề), chọn file.
 3. Phía trên ô nhập hiện thẻ tiến độ gồm tên file và phần trăm. Bạn vẫn chat bình thường trong lúc gửi.
 4. Gửi xong, thẻ biến mất và khung chat báo `Sent <file> ... 100%  Done.`
 
@@ -58,8 +58,8 @@ Bên nhận: file lưu vào thư mục `downloads/` (hoặc thư mục đặt b�
 
 ## 6. Trạng thái và giao diện
 
-- **Nút trạng thái (Online / Away)**: bấm để đổi, những người khác thấy sau khoảng 1 giây (chấm đổi màu).
-- **Dark / Light**: bấm để đổi giao diện, hội thoại đang có được giữ nguyên.
+- **Thẻ hồ sơ của bạn**: bấm để đổi giữa Online và Away, những người khác thấy sau khoảng 1 giây (chấm đổi màu).
+- **Nút mặt trăng, mặt trời**: bấm để đổi giao diện sáng hoặc tối, hội thoại đang có được giữ nguyên.
 
 ![Giao diện tối](img/gui-toi.png)
 

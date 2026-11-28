@@ -50,6 +50,7 @@ class ConversationView(tk.Frame):
         self._chips: list[tk.Canvas] = []
         self._last_date: str | None = None
         self._scroll_job: str | None = None
+        self._spacer: tk.Frame | None = None
         self.text = tk.Text(
             self, state="disabled", wrap="word", width=64, height=22, relief="flat",
             highlightthickness=0, padx=SP_LG, pady=SP_MD, cursor="arrow",
@@ -60,11 +61,13 @@ class ConversationView(tk.Frame):
         self.text.bind("<Configure>", self._on_text_resize)
         self.text.bind("<Destroy>", lambda _event: self.cancel_scroll())
         self._configure_tags()
+        self._reset_spacer()
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.palette = palette
         self.configure(bg=palette["bg"])
         self.text.configure(bg=palette["bg"], fg=palette["text"])
+        self._spacer.configure(bg=palette["bg"])
         self.text.tag_configure("info", foreground=palette["subtle"], font=self.fonts.sub)
         self.text.tag_configure("error", foreground=palette["error"], font=self.fonts.sub)
         self.text.tag_configure("plain", foreground=palette["text"], font=self.fonts.mono)
@@ -88,8 +91,11 @@ class ConversationView(tk.Frame):
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.configure(state="disabled")
+        self._reset_spacer()
         for index in range(len(self.lines)):
-            self._render(index)
+            self._render(index, fit=False)
+        self._fit_spacer()
+        self.scroll_to_end()
 
     def message_texts(self) -> list[str]:
         return [line.text for line in self.lines if line.kind in MESSAGE_KINDS]
@@ -132,6 +138,26 @@ class ConversationView(tk.Frame):
         if self.text.winfo_exists():
             self.text.yview_moveto(1.0)
 
+    def spacer_height(self) -> int:
+        return self._spacer.winfo_height()
+
+    def _reset_spacer(self) -> None:
+        if self._spacer is not None:
+            self._spacer.destroy()
+        self._spacer = tk.Frame(self.text, width=1, height=1, bg=self.palette["bg"], highlightthickness=0, bd=0)
+        self.text.configure(state="normal")
+        self.text.window_create("1.0", window=self._spacer)
+        self.text.insert("1.1", "\n")
+        self.text.configure(state="disabled")
+
+    def _fit_spacer(self) -> None:
+        self._spacer.configure(height=1)
+        self.text.update_idletasks()
+        counted = self.text.count("1.0", "end", "ypixels")
+        content = counted[0] if counted else 0
+        free = self.text.winfo_height() - content - 2 * SP_MD
+        self._spacer.configure(height=max(1, free))
+
     def _configure_tags(self) -> None:
         self.text.tag_configure("mine", justify="right", rmargin=SP_XS)
         self.text.tag_configure("other", justify="left", lmargin1=SP_XS)
@@ -143,13 +169,15 @@ class ConversationView(tk.Frame):
         self.text.tag_configure("error", justify="center", spacing1=SP_SM, spacing3=SP_XS)
 
     def _on_text_resize(self, event: tk.Event) -> None:
-        if event.width <= 40 or abs(event.width - self.width) <= 2:
-            return
-        self.width = event.width
-        for index, canvas in self._canvases.items():
-            self._layout_bubble(canvas, index)
-        self.on_resize()
-        self.scroll_to_end()
+        width_changed = event.width > 40 and abs(event.width - self.width) > 2
+        if width_changed:
+            self.width = event.width
+            for index, canvas in self._canvases.items():
+                self._layout_bubble(canvas, index)
+            self.on_resize()
+        self._fit_spacer()
+        if width_changed:
+            self.scroll_to_end()
 
     def _same_group(self, first: int, second: int) -> bool:
         if first < 0 or second >= len(self.lines):
@@ -160,7 +188,7 @@ class ConversationView(tk.Frame):
             and a.date == b.date and b.timestamp - a.timestamp < GROUP_WINDOW_SEC
         )
 
-    def _render(self, index: int) -> None:
+    def _render(self, index: int, fit: bool = True) -> None:
         line = self.lines[index]
         self.text.configure(state="normal")
         if line.kind in MESSAGE_KINDS:
@@ -168,7 +196,9 @@ class ConversationView(tk.Frame):
         else:
             self.text.insert("end", line.text + "\n", line.kind)
         self.text.configure(state="disabled")
-        self.scroll_to_end()
+        if fit:
+            self._fit_spacer()
+            self.scroll_to_end()
 
     def _render_message(self, index: int) -> None:
         line = self.lines[index]

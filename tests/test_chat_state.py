@@ -49,6 +49,15 @@ class TestChatState(unittest.TestCase):
         self.assertFalse(state.add_message("peer2", "bob", "hi"))
         self.assertEqual(state.unread("peer2"), 1)
 
+    def test_latest_unread_returns_the_newest_unread_message(self) -> None:
+        state = ChatState()
+        self.assertIsNone(state.latest_unread("peer1"))
+        state.add_message("peer1", "alice", "one")
+        state.add_message("peer1", "alice", "two")
+        self.assertEqual(state.latest_unread("peer1"), Message("alice", "two"))
+        state.switch_to("peer1")
+        self.assertIsNone(state.latest_unread("peer1"))
+
     def test_concurrent_add_message(self) -> None:
         state = ChatState()
 

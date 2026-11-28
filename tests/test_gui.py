@@ -6,7 +6,18 @@ import unittest
 from unittest.mock import patch
 
 from chat_state import ChatState
+from gui_widgets import paint_sun
 from peer_store import Peer
+
+class QuietTk(tk.Tk):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.attributes("-alpha", 0.0)
+
+
+def quiet_windows():
+    return patch("tkinter.Tk", QuietTk)
+
 
 ALICE = Peer("11111111", "Alice", "10.0.0.2", 5001, "online", 0.0)
 BOB = Peer("22222222", "Bob", "10.0.0.3", 5002, "away", 0.0)
@@ -39,7 +50,8 @@ class TestGuiTerminal(unittest.TestCase):
         from gui import GuiTerminal
 
         try:
-            window = GuiTerminal("Me", StubStore(peers or []), ChatState(), threading.Event())
+            with quiet_windows():
+                window = GuiTerminal("Me", StubStore(peers or []), ChatState(), threading.Event())
         except tk.TclError:
             self.skipTest("no display available")
         self.addCleanup(window.root.destroy)
@@ -139,12 +151,86 @@ class TestGuiTerminal(unittest.TestCase):
         window.state.switch_to(ALICE.peer_id)
         window._refresh()
         shown = self.texts(window)
-        for expected in ("Alice", "Bob", "online", "away", "1", "A", "B"):
+        for expected in ("Alice", "Bob", "online", "hi", "1", "A", "B"):
             self.assertIn(expected, shown)
         fills = [window.peers.itemcget(i, "fill") for i in window.peers.find_all()
                  if window.peers.type(i) == "rectangle"]
         self.assertIn(window.palette["selected"], fills)
         self.assertNotIn(window.palette["hover"], fills)
+
+    def test_unread_peer_shows_its_latest_message_as_preview(self) -> None:
+        window = self.open([ALICE, BOB])
+        window.state.add_message(BOB.peer_id, "Bob", "first")
+        window.state.add_message(BOB.peer_id, "Bob", "second line")
+        window._refresh()
+        shown = self.texts(window)
+        self.assertIn("second line", shown)
+        self.assertNotIn("first", shown)
+        self.assertNotIn("away", shown)
+
+    def test_chat_partner_preview_shows_last_message_with_time(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.say("[Alice] hello there\nsecond line")
+        window.say("[Me] on my way")
+        with patch("gui.time.strftime", return_value="09:41"):
+            window._drain()
+        window._refresh()
+        shown = self.texts(window)
+        self.assertIn("You: on my way", shown)
+        self.assertIn("09:41", shown)
+
+    def test_profile_card_shows_own_name_and_toggles_status(self) -> None:
+        window = self.open()
+        self.assertEqual(window.profile.name, "Me")
+        self.assertEqual(window.profile.status, "online")
+        window.profile.command()
+        self.assertEqual(window.profile.status, "away")
+        self.assertEqual(next(window.lines()), "/status away")
+
+    def test_header_actions_follow_the_selected_partner(self) -> None:
+        window = self.open([ALICE])
+        window._refresh()
+        self.assertEqual(window.header_actions.winfo_manager(), "")
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        self.assertEqual(window.header_actions.winfo_manager(), "pack")
+
+    def test_header_buttons_send_file_and_leave_chat(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.close_button.command()
+        self.assertEqual(next(window.lines()), "/leave")
+        with patch("gui.filedialog.askopenfilename", return_value="C:/x/y.txt"):
+            window.file_action.command()
+        self.assertEqual(next(window.lines()), "/send C:/x/y.txt")
+
+    def test_empty_state_offers_three_suggestions(self) -> None:
+        window = self.open([ALICE])
+        window._refresh()
+        chips = window.empty_actions.winfo_children()
+        self.assertEqual([chip.text for chip in chips], ["Find someone", "Change status", "Switch theme"])
+        chips[1].command()
+        self.assertEqual(next(window.lines()), "/status away")
+
+    def test_few_messages_sit_at_the_bottom_of_the_conversation(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.say("[Alice] hello")
+        window._drain()
+        window.root.update()
+        window.root.update()
+        self.assertGreater(window.view.spacer_height(), 100)
+        bubble = window.view.bubbles()[0]
+        self.assertGreater(window.log.bbox(window.log.index("end-2c"))[1], window.log.winfo_height() // 2)
+
+    def test_peer_statuses_report_what_the_sidebar_shows(self) -> None:
+        window = self.open([ALICE, BOB])
+        window._refresh()
+        self.assertEqual(window.peer_statuses(), {"Alice": "online", "Bob": "away"})
 
     def test_header_names_the_current_partner(self) -> None:
         window = self.open([ALICE, BOB])
@@ -173,7 +259,7 @@ class TestGuiTerminal(unittest.TestCase):
         self.assertNotEqual(window.palette["bg"], light)
         self.assertEqual(window.root.cget("bg"), window.palette["bg"])
         self.assertEqual(self.windows(window), 2)
-        self.assertEqual(window.theme_button.text, "Light")
+        self.assertIs(window.theme_button.icon, paint_sun)
 
     def test_inspection_hooks_report_what_is_on_screen(self) -> None:
         window = self.open([ALICE, BOB])
@@ -201,7 +287,8 @@ class TestGuiTerminal(unittest.TestCase):
         from gui import GuiTerminal
 
         try:
-            window = GuiTerminal("Me", StubStore([]), ChatState(), threading.Event())
+            with quiet_windows():
+                window = GuiTerminal("Me", StubStore([]), ChatState(), threading.Event())
         except tk.TclError:
             self.skipTest("no display available")
         window._close()

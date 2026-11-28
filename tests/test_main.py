@@ -18,6 +18,7 @@ class TestMainArguments(unittest.TestCase):
             return subprocess.run(
                 [sys.executable, "-X", "utf8", MAIN, "--name", "Zed", *args],
                 cwd=cwd, capture_output=True, text=True, timeout=15, input="",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 
     def test_out_of_range_ports_rejected_without_traceback(self) -> None:

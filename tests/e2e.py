@@ -80,6 +80,7 @@ def main() -> None:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             procs[name] = proc
             outputs[proc] = []

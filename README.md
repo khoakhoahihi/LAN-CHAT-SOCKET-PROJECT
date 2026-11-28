@@ -50,9 +50,9 @@ Thêm `--gui` để dùng cửa sổ thay cho console. Lõi chương trình gi�
 python main.py --name Quan --gui
 ```
 
-- Cột trái: ô tìm kiếm lọc theo tên, rồi danh sách người đang online với avatar màu, chấm trạng thái (xanh là online, cam là away) và huy hiệu số tin chưa đọc. Bấm vào một người để mở chat; người đang chat được tô nền chàm nhạt và hiện tên ở thanh tiêu đề. Cột trái tự thu hẹp khi cửa sổ hẹp.
+- Cột trái: ô tìm kiếm lọc theo tên, rồi danh sách người đang online với avatar màu, chấm trạng thái (xanh là online, cam là away), tin cuối kèm giờ và huy hiệu số tin chưa đọc. Chân cột là thẻ hồ sơ của bạn (bấm để đổi `online`/`away`) và nút mặt trăng, mặt trời đổi giao diện. Bấm vào một người để mở chat; người đang chat được tô nền chàm nhạt và hiện tên ở thanh tiêu đề. Cột trái tự thu hẹp khi cửa sổ hẹp.
 - Khung chat: tin của mình là bong bóng chàm bên phải, tin của bạn màu xám nhạt bên trái, có giờ gửi; tin liên tiếp của cùng một người trong 5 phút được gộp nhóm. Thông báo hệ thống hiện ở giữa, lỗi màu đỏ, và vẫn hiện khi chưa chọn ai.
-- Gửi file có thanh tiến độ phía trên ô nhập. Nút `+` mở hộp chọn file, nút trạng thái (`Online`/`Away`) ở chân cột trái đổi trạng thái, nút `Dark`/`Light` đổi giao diện sáng hoặc tối.
+- Gửi file có thanh tiến độ phía trên ô nhập. Nút `+` ở ô nhập và nút tài liệu ở thanh tiêu đề mở hộp chọn file, nút `x` ở thanh tiêu đề đóng cuộc chat.
 - Hướng dẫn chi tiết từng thao tác, kèm ảnh: [`docs/huong-dan-gui.md`](docs/huong-dan-gui.md).
 - Cần `tkinter`, đã có sẵn trong Python trên Windows và macOS. Trên Ubuntu cài thêm: `sudo apt install python3-tk`.
 

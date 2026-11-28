@@ -16,8 +16,8 @@ from gui_style import (
     DARK, LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, Fonts, classify, truncate_text,
 )
 from gui_widgets import (
-    SCROLL_W, IconButton, PillButton, PillInput, SlimScrollbar,
-    paint_moon, paint_plus, paint_send, paint_sun,
+    SCROLL_W, IconButton, PillButton, PillInput, ProfileCard, SlimScrollbar,
+    paint_close, paint_file, paint_moon, paint_plus, paint_send, paint_sun,
 )
 
 POLL_MS = 100
@@ -38,7 +38,12 @@ ROW_RADIUS = 10
 AVATAR_SIZE = 40
 DOT_SIZE = 10
 SEARCH_H = 36
-FOOTER_BUTTON_H = 32
+PROFILE_H = 52
+THEME_BUTTON = 36
+ACTION_SIZE = 34
+CHIP_H = 32
+CHIP_W = 124
+EMPTY_ACTIONS_Y = 92
 INPUT_H = 40
 ATTACH_SIZE = 36
 CARD_H = 54
@@ -60,6 +65,7 @@ class PeerRow(NamedTuple):
     status: str
     unread: int
     active: bool
+    preview: tuple[str, str] | None
 
 
 class GuiTerminal:
@@ -76,6 +82,7 @@ class GuiTerminal:
         self._peer_names: list[str] = []
         self._signature: tuple = ()
         self._partner: object | None = None
+        self._previews: dict[str, tuple[str, str]] = {}
         self._hover_index: int | None = None
         self._status = "online"
         self._dark = False
@@ -130,6 +137,9 @@ class GuiTerminal:
     def sidebar_texts(self) -> list[str]:
         canvas = self.peers
         return [canvas.itemcget(item, "text") for item in canvas.find_all() if canvas.type(item) == "text"]
+
+    def peer_statuses(self) -> dict[str, str]:
+        return {row.name: row.status for row in self._rows}
 
     def partner_title(self) -> str:
         return self.partner.cget("text")
@@ -192,13 +202,14 @@ class GuiTerminal:
         self.peers.bind("<Leave>", self._on_peer_leave)
         self._themed.append(self.peers_scroll)
 
-        footer = self._paint(tk.Frame(self.side, padx=SP_MD, pady=SP_MD), bg="panel")
+        footer = self._paint(tk.Frame(self.side, padx=SP_SM, pady=SP_SM), bg="panel")
         footer.pack(fill="x")
-        self.status_button = PillButton(footer, FOOTER_BUTTON_H, self.fonts.btn, self._change_status, "panel")
-        self.status_button.pack(side="left", fill="x", expand=True, padx=(0, SP_XS))
-        self.theme_button = PillButton(footer, FOOTER_BUTTON_H, self.fonts.btn, self._toggle_theme, "panel")
-        self.theme_button.pack(side="left", fill="x", expand=True, padx=(SP_XS, 0))
-        self._themed.extend((self.status_button, self.theme_button))
+        self.theme_button = IconButton(footer, THEME_BUTTON, paint_moon, self._toggle_theme, "panel", accent=False)
+        self.theme_button.pack(side="right", padx=(SP_XS, 0))
+        self.profile = ProfileCard(footer, self.name, PROFILE_H, self.fonts, self._change_status, "panel")
+        self.profile.pack(side="left", fill="x", expand=True)
+        self.status_button = self.profile
+        self._themed.extend((self.profile, self.theme_button))
         self._hairline(self.root, vertical=True, side="left", fill="y")
 
     def _build_chat(self) -> None:
@@ -219,6 +230,19 @@ class GuiTerminal:
         self.empty_state = self._paint(tk.Frame(self.chat_body), bg="bg")
         self.empty_art = self._paint(tk.Canvas(self.empty_state, highlightthickness=0, bd=0), bg="bg")
         self.empty_art.place(relx=0.5, rely=0.5, anchor="center")
+        self.empty_actions = self._paint(tk.Frame(self.empty_state), bg="bg")
+        self.empty_actions.place(relx=0.5, rely=0.5, y=EMPTY_ACTIONS_Y, anchor="n")
+        suggestions = (
+            ("Find someone", self._focus_search),
+            ("Change status", self._change_status),
+            ("Switch theme", self._toggle_theme),
+        )
+        for label, command in suggestions:
+            chip = PillButton(self.empty_actions, CHIP_H, self.fonts.btn, command, "bg")
+            chip.configure(width=CHIP_W)
+            chip.configure_content(label)
+            chip.pack(side="left", padx=SP_XS)
+            self._themed.append(chip)
 
     def _build_header(self) -> None:
         header = self._paint(tk.Frame(self.main, height=HEADER_H, padx=SP_LG), bg="bg")
@@ -239,6 +263,12 @@ class GuiTerminal:
             bg="bg", fg="muted",
         )
         self.partner_sub.pack(fill="x")
+        self.header_actions = self._paint(tk.Frame(header), bg="bg")
+        self.close_button = IconButton(self.header_actions, ACTION_SIZE, paint_close, self._leave_chat, "bg", accent=False)
+        self.file_action = IconButton(self.header_actions, ACTION_SIZE, paint_file, self._send_file, "bg", accent=False)
+        self.close_button.pack(side="right")
+        self.file_action.pack(side="right", padx=(0, SP_XS))
+        self._themed.extend((self.file_action, self.close_button))
 
     def _build_input(self) -> None:
         self.transfer = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_SM), bg="bg")
@@ -279,9 +309,9 @@ class GuiTerminal:
         self._refresh()
 
     def _update_footer_buttons(self) -> None:
-        self.status_button.configure_content(self._status.capitalize(), dot_color=STATUS_COLORS[self._status])
-        label, icon = ("Light", paint_sun) if self._dark else ("Dark", paint_moon)
-        self.theme_button.configure_content(label, icon=icon)
+        self.profile.configure_content(self._status)
+        self.theme_button.icon = paint_sun if self._dark else paint_moon
+        self.theme_button.draw()
 
     def _toggle_theme(self) -> None:
         self.set_theme("light" if self._dark else "dark")
@@ -359,6 +389,12 @@ class GuiTerminal:
         self._update_footer_buttons()
         self._in.put(f"/status {self._status}")
 
+    def _leave_chat(self) -> None:
+        self._in.put("/leave")
+
+    def _focus_search(self) -> None:
+        self.search_entry.focus_set()
+
     def _consume_transfer_notice(self, kind: str, text: str) -> bool:
         if kind == "info":
             step = TRANSFER_STEP.fullmatch(text)
@@ -395,13 +431,21 @@ class GuiTerminal:
                     continue
                 line = LogLine(kind, who, text, time.strftime("%H:%M"), time.time(), time.strftime("%Y-%m-%d"))
                 self.view.append(line)
+                self._remember_preview(line)
         self._sync_empty_view()
+
+    def _remember_preview(self, line: LogLine) -> None:
+        first_line = line.text.split("\n")[0]
+        if line.kind == "other":
+            self._previews[line.who] = (first_line, line.stamp)
+        elif line.kind == "mine" and self._partner is not None:
+            self._previews[self._partner.name] = ("You: " + first_line, line.stamp)
 
     def _refresh(self) -> None:
         query = self.search_entry.get().strip().lower()
         peers = [peer for peer in self.store.get_peers() if not query or query in peer.name.lower()]
         current = self.state.current
-        rows = [PeerRow(p.name, p.status, self.state.unread(p.peer_id), p.peer_id == current) for p in peers]
+        rows = [self._peer_row(peer, current) for peer in peers]
         partner = self.store.get(current) if current else None
         about = (partner.name, partner.status, partner.ip, partner.tcp_port) if partner else None
         signature = (tuple(rows), about, self._dark, query)
@@ -417,6 +461,15 @@ class GuiTerminal:
         self._draw_peers()
         self._update_header(partner)
         self.search.draw()
+
+    def _peer_row(self, peer: object, current: str | None) -> PeerRow:
+        latest = self.state.latest_unread(peer.peer_id)
+        if latest is not None:
+            preview = (latest.text.split("\n")[0], "")
+        else:
+            preview = self._previews.get(peer.name)
+        unread = self.state.unread(peer.peer_id)
+        return PeerRow(peer.name, peer.status, unread, peer.peer_id == current, preview)
 
     def _draw_peers(self) -> None:
         canvas, palette = self.peers, self.palette
@@ -441,23 +494,32 @@ class GuiTerminal:
         x = ROW_INSET + SP_SM
         y = top + (ROW_HEIGHT - AVATAR_SIZE) // 2
         draw_avatar(canvas, x, y, AVATAR_SIZE, row.name, fonts.bold)
-        dot = (x + AVATAR_SIZE - DOT_SIZE, y + AVATAR_SIZE - DOT_SIZE)
-        draw_presence_dot(canvas, dot[0], dot[1], DOT_SIZE, STATUS_COLORS[row.status], background)
+        dot_x, dot_y = x + AVATAR_SIZE - DOT_SIZE, y + AVATAR_SIZE - DOT_SIZE
+        draw_presence_dot(canvas, dot_x, dot_y, DOT_SIZE, STATUS_COLORS[row.status], background)
         right = width - ROW_INSET - SP_SM
-        if row.unread:
-            right = self._draw_unread_badge(canvas, row.unread, right, top) - SP_SM
         text_x = x + AVATAR_SIZE + SP_MD
-        name = truncate_text(row.name, fonts.bold, right - text_x)
+        preview = row.preview
+        subtitle = preview[0] if preview else row.status
+        name_right = right
+        if preview and preview[1]:
+            canvas.create_text(right, top + 22, text=preview[1], anchor="e", fill=palette["subtle"], font=fonts.small)
+            name_right = right - fonts.small.measure(preview[1]) - SP_SM
+        name = truncate_text(row.name, fonts.bold, name_right - text_x)
         canvas.create_text(text_x, top + 22, text=name, anchor="w", fill=palette["text"], font=fonts.bold)
-        canvas.create_text(text_x, top + 40, text=row.status, anchor="w", fill=palette["muted"], font=fonts.sub)
+        subtitle_right = right
+        if row.unread:
+            subtitle_right = self._draw_unread_badge(canvas, row.unread, right, top + 42) - SP_SM
+        shown = truncate_text(subtitle, fonts.sub, subtitle_right - text_x)
+        canvas.create_text(text_x, top + 42, text=shown, anchor="w", fill=palette["muted"], font=fonts.sub)
 
-    def _draw_unread_badge(self, canvas: tk.Canvas, unread: int, right: int, top: int) -> int:
+    def _draw_unread_badge(self, canvas: tk.Canvas, unread: int, right: int, centre_y: int) -> int:
         label = "99+" if unread > 99 else str(unread)
         left = right - max(BADGE_H, self.fonts.btn_bold.measure(label) + SP_MD)
-        badge_top = top + (ROW_HEIGHT - BADGE_H) // 2
+        badge_top = centre_y - BADGE_H // 2
         draw_rounded(canvas, left, badge_top, right, badge_top + BADGE_H, BADGE_H // 2, self.palette["accent"])
-        centre = ((left + right) // 2, badge_top + BADGE_H // 2)
-        canvas.create_text(*centre, text=label, fill=self.palette["on_accent"], font=self.fonts.btn_bold)
+        canvas.create_text(
+            (left + right) // 2, centre_y, text=label, fill=self.palette["on_accent"], font=self.fonts.btn_bold,
+        )
         return left
 
     def _update_header(self, partner: object | None) -> None:
@@ -468,11 +530,13 @@ class GuiTerminal:
             subtitle = f"{partner.status}  ·  {partner.ip}:{partner.tcp_port}"
             self.input.hint = f"Message {partner.name}"
             self.header_avatar.pack(side="left", before=self.header_info, padx=(0, SP_MD))
+            self.header_actions.pack(side="right")
             self._draw_header_avatar(partner)
         else:
             title, subtitle = EMPTY_TITLE, EMPTY_PROMPT
             self.input.hint = EMPTY_INPUT
             self.header_avatar.pack_forget()
+            self.header_actions.pack_forget()
         self.partner.configure(text=title)
         self.partner_sub.configure(text=truncate_text(subtitle, self.fonts.sub, available))
         self.input.dimmed = self._empty_visible
