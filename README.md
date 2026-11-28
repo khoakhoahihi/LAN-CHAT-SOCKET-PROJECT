@@ -53,6 +53,7 @@ python main.py --name Quan --gui
 - Cột trái: ô tìm kiếm lọc theo tên, rồi danh sách người đang online với avatar màu, chấm trạng thái (xanh là online, cam là away) và huy hiệu số tin chưa đọc. Bấm vào một người để mở chat; người đang chat được tô xanh đặc và hiện tên ở thanh tiêu đề. Cột trái tự thu hẹp khi cửa sổ hẹp.
 - Khung chat: tin của mình là bong bóng xanh lá nhạt bên phải, tin của bạn màu trắng bên trái, có giờ gửi; tin liên tiếp của cùng một người trong 5 phút được gộp nhóm. Thông báo hệ thống hiện ở giữa, lỗi màu đỏ, và vẫn hiện khi chưa chọn ai.
 - Gửi file có thanh tiến độ phía trên ô nhập. Nút `+` mở hộp chọn file, nút *Status* đổi `online`/`away`, nút *Dark mode* đổi giao diện sáng hoặc tối.
+- Hướng dẫn chi tiết từng thao tác, kèm ảnh: [`docs/huong-dan-gui.md`](docs/huong-dan-gui.md).
 - Cần `tkinter`, đã có sẵn trong Python trên Windows và macOS. Trên Ubuntu cài thêm: `sudo apt install python3-tk`.
 
 ### Trên nhiều máy
