@@ -1,88 +1,104 @@
 from __future__ import annotations
 
-import math, queue, re, sys, threading, time, tkinter as tk
+import queue
+import re
+import sys
+import threading
+import time
+import tkinter as tk
 from collections.abc import Callable, Iterator
-from tkinter import filedialog, font as tkfont
+from tkinter import filedialog
+from typing import NamedTuple
 
-POLL_MS, CLOSE_DELAY_MS, GROUP_WINDOW_SEC, WIN_W, WIN_H, WIN_MIN_W, WIN_MIN_H = 100, 400, 300, 960, 640, 640, 440
-SIDE_WIDE, SIDE_MID, SIDE_NARROW, HEADER_H, ROW_HEIGHT, AVATAR_SIZE, HEADER_AVATAR, DOT_SIZE = 300, 250, 220, 64, 60, 44, 36, 12
-INPUT_H, SEARCH_H, BTN_SIZE, SCROLL_W, MIN_THUMB, WRAP_SHARE = 38, 32, 36, 8, 24, 0.65
-SP_XS, SP_SM, SP_MD, SP_LG, SP_XL = 4, 8, 12, 16, 24
-R_TAIL, R_TOUCH, R_BTN, R_CARD, R_BUBBLE, R_PILL = 4, 6, 8, 12, 14, 19
-F_TIME, F_SUB, F_BTN, F_BODY, F_TITLE, F_EMPTY = 7, 8, 9, 10, 12, 13
-EMPTY_TITLE, EMPTY_PROMPT, EMPTY_INPUT = "No chat selected", "Select someone on the left to start chatting", "Select a chat to message..."
-PEER_COLORS = ("#E05A47", "#E8833A", "#C98A1C", "#2F9E44", "#0CA678", "#4263EB", "#7048E8", "#D6336C")
-STATUS_COLORS = {"online": "#22C55E", "away": "#F59E0B"}
-LIGHT = {
-    "bg": "#E7ECF1", "panel": "#FFFFFF", "text": "#17212B", "muted": "#707F8C", "border": "#E6EAEF", "mine": "#E1F6CC", "mine_text": "#17212B", "mine_time": "#5FA146",
-    "other": "#FFFFFF", "other_text": "#17212B", "other_time": "#8A9BA8", "accent": "#3390EC", "row": "#3390EC", "row_text": "#FFFFFF", "row_sub": "#DCEEFF",
-    "hover": "#F1F4F7", "error": "#D14B4B", "input_bg": "#F4F6F8", "input_focus": "#FFFFFF", "dim": "#C5CFD8", "pill_bg": "#D8E0E8", "scroll": "#BCC7D4", "scroll_hover": "#92A2B3",
-}
-DARK = {
-    "bg": "#0E1621", "panel": "#17212B", "text": "#E4ECF2", "muted": "#7D8E9E", "border": "#22303F", "mine": "#2B5278", "mine_text": "#E4ECF2", "mine_time": "#8BB0D3",
-    "other": "#182533", "other_text": "#E4ECF2", "other_time": "#6C7F91", "accent": "#5288C1", "row": "#2B5278", "row_text": "#E4ECF2", "row_sub": "#A8C2DC",
-    "hover": "#202B36", "error": "#E06C75", "input_bg": "#242F3D", "input_focus": "#242F3D", "dim": "#384656", "pill_bg": "#182533", "scroll": "#394B5E", "scroll_hover": "#546D87",
-}
-MESSAGE, TRANSFER_START, TRANSFER_STEP = re.compile(r"\[([^\]]+)\] (.*)", re.S), re.compile(r"(?:Sending|Receiving) (.+) \(.+\) \.\.\."), re.compile(r"(.+)  (\d+)%")
+from gui_chat import ConversationView, LogLine
+from gui_shapes import draw_avatar, draw_circle, draw_presence_dot, draw_rounded, draw_rounded_border
+from gui_style import (
+    DARK, LIGHT, SP_LG, SP_MD, SP_SM, SP_XL, SP_XS, STATUS_COLORS, Fonts, classify, truncate_text,
+)
+from gui_widgets import (
+    SCROLL_W, IconButton, PillButton, PillInput, SlimScrollbar,
+    paint_moon, paint_plus, paint_send, paint_sun,
+)
+
+POLL_MS = 100
+CLOSE_DELAY_MS = 400
+WINDOW_WIDTH = 960
+WINDOW_HEIGHT = 640
+WINDOW_MIN_WIDTH = 640
+WINDOW_MIN_HEIGHT = 440
+SIDE_WIDE = 300
+SIDE_MID = 250
+SIDE_NARROW = 220
+MID_BELOW = 900
+NARROW_BELOW = 800
+HEADER_H = 64
+ROW_HEIGHT = 60
+ROW_INSET = 8
+ROW_RADIUS = 10
+AVATAR_SIZE = 40
+DOT_SIZE = 10
+SEARCH_H = 36
+FOOTER_BUTTON_H = 32
+INPUT_H = 40
+ATTACH_SIZE = 36
+CARD_H = 54
+CARD_RADIUS = 12
+BADGE_H = 20
+EMPTY_ART_H = 150
+
+EMPTY_TITLE = "No chat selected"
+EMPTY_PROMPT = "Select someone on the left to start chatting"
+EMPTY_INPUT = "Select a chat to message..."
+
+TRANSFER_START = re.compile(r"(?:Sending|Receiving) (.+) \(.+\) \.\.\.")
+TRANSFER_STEP = re.compile(r"(.+)  (\d+)%")
+TRANSFER_DONE_PREFIXES = ("Sent ", "Received ")
 
 
-def classify(line: str, me: str) -> tuple[str, str, str]:
-    if line[:3] in ("[*]", "[!]"):
-        return ("error" if line[1] == "!" else "info"), "", line[4:]
-    m = MESSAGE.fullmatch(line)
-    return (("mine" if m[1] == me else "other"), m[1], m[2]) if m else ("plain", "", line)
-
-
-def rounded_rect(canvas: tk.Canvas, x1: float, y1: float, x2: float, y2: float, radii: int | tuple[int, int, int, int], **kw: object) -> int:
-    tl, tr, br, bl = (radii,) * 4 if isinstance(radii, int) else radii
-    cap = max(0.0, min((x2 - x1) / 2, (y2 - y1) / 2))
-    kw.setdefault("outline", "")
-    if not kw["outline"]:
-        kw["width"] = 0
-    pts: list[float] = []
-    for cx, cy, r, a0 in ((x2 - min(tr, cap), y1 + min(tr, cap), min(tr, cap), -math.pi / 2), (x2 - min(br, cap), y2 - min(br, cap), min(br, cap), 0.0),
-                          (x1 + min(bl, cap), y2 - min(bl, cap), min(bl, cap), math.pi / 2), (x1 + min(tl, cap), y1 + min(tl, cap), min(tl, cap), math.pi)):
-        for s in range((6 if r > 0 else 0) + 1):
-            a = a0 + (math.pi / 2) * (s / 6 if r > 0 else 0)
-            pts.extend((cx + r * math.cos(a), cy + r * math.sin(a)))
-    return canvas.create_polygon(pts, **kw)
-
-
-def truncate_text(text: str, font: tkfont.Font, max_w: int) -> str:
-    if max_w <= 0 or font.measure(text) <= max_w:
-        return text
-    lo, hi = 0, len(text)
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        lo, hi = (mid, hi) if font.measure(text[:mid] + "...") <= max_w else (lo, mid - 1)
-    return text[:lo] + "..." if lo > 0 else "..."
+class PeerRow(NamedTuple):
+    name: str
+    status: str
+    unread: int
+    active: bool
 
 
 class GuiTerminal:
     def __init__(self, name: str, store: object, state: object, stop: threading.Event) -> None:
-        self.name, self.store, self.state, self.stop = name, store, state, stop
-        self._out, self._in, self._history, self._bubble_widgets = queue.Queue(), queue.Queue(), [], {}
-        self._peer_names, self._rows, self._paints, self._pills, self._scrolls, self._signature = [], [], [], [], [], ()
-        self._hover_idx, self._status, self._transferring, self._empty_visible, self._send_active, self._dark = None, "online", False, True, False, False
-        self._transfer_label, self._log_width, self._side_width, self._empty_since, self._last_msg_date, self._partner, self._scroll_job, self.palette = "", 620, SIDE_WIDE, 0, None, None, None, LIGHT
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                ctypes.windll.shcore.SetProcessDpiAwareness(1)
-            except (AttributeError, OSError):
-                pass
+        self.name = name
+        self.store = store
+        self.state = state
+        self.stop = stop
+        self._out: queue.Queue[str] = queue.Queue()
+        self._in: queue.Queue[str] = queue.Queue()
+        self._paints: list[tuple[tk.Widget, dict[str, str]]] = []
+        self._themed: list[object] = []
+        self._rows: list[PeerRow] = []
+        self._peer_names: list[str] = []
+        self._signature: tuple = ()
+        self._partner: object | None = None
+        self._hover_index: int | None = None
+        self._status = "online"
+        self._dark = False
+        self._transferring = False
+        self._transfer_label = ""
+        self.transfer_percent = 0
+        self._empty_visible = True
+        self._empty_since = 0
+        self._send_active = False
+        self._side_width = SIDE_WIDE
+        self.palette = LIGHT
+        self._enable_sharp_text()
         self.root = tk.Tk()
         self.root.title(f"LAN Chat - {name}")
-        self.root.geometry(f"{WIN_W}x{WIN_H}"), self.root.minsize(WIN_MIN_W, WIN_MIN_H)
-        fam = "Segoe UI" if sys.platform == "win32" else tkfont.nametofont("TkDefaultFont")["family"]
-        mono = "Consolas" if sys.platform == "win32" else tkfont.nametofont("TkFixedFont")["family"]
-        for attr, f, sz, wt in (("small", fam, F_TIME, "normal"), ("sub", fam, F_SUB, "normal"), ("btn", fam, F_BTN, "normal"), ("btn_bold", fam, F_BTN, "bold"),
-                                ("mono", mono, F_BTN, "normal"), ("body", fam, F_BODY, "normal"), ("bold", fam, F_BODY, "bold"), ("title", fam, F_TITLE, "bold"), ("empty_title", fam, F_EMPTY, "bold")):
-            setattr(self, attr, tkfont.Font(family=f, size=sz, weight=wt))
-        self._build_side(), self._build_chat()
+        self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+        self.root.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.fonts = Fonts()
+        self._build_side()
+        self._build_chat()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<Configure>", self._on_root_resize)
-        [self.root.bind_all(ev, self._wheel) for ev in ("<MouseWheel>", "<Button-4>", "<Button-5>")]
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.root.bind_all(sequence, self._wheel)
         self._apply_theme()
 
     def say(self, text: str) -> None:
@@ -99,160 +115,21 @@ class GuiTerminal:
         worker = threading.Thread(target=work)
         worker.start()
         self._poll()
-        self.entry.focus_set(), self.root.mainloop(), self.stop.set(), worker.join()
-
-    def _mk(self, cls: type, parent: tk.Misc, pack: dict | None = None, paint: dict | None = None, **kw: object) -> object:
-        w = cls(parent, **kw)
-        if pack is not None:
-            w.pack(**pack)
-        if paint:
-            self._paints.append((w, paint))
-        return w
-
-    def _make_scroll(self, parent: tk.Misc, target: tk.Widget, bg_key: str) -> tk.Canvas:
-        sc = self._mk(tk.Canvas, parent, {"side": "right", "fill": "y"}, {"bg": bg_key}, width=SCROLL_W, highlightthickness=0, bd=0)
-        st = {"r": (0.0, 1.0), "h": False, "p": False}
-        def draw() -> None:
-            sc.delete("thumb")
-            lo, hi = st["r"]
-            if st["p"] and (lo > 0.0 or hi < 1.0):
-                ht = max(sc.winfo_height(), 1)
-                y1, y2 = max(0.0, min(lo * ht, ht - MIN_THUMB)), min(ht, max(hi * ht, lo * ht + MIN_THUMB))
-                rounded_rect(sc, 2, y1 + 2, SCROLL_W - 1, y2 - 2, 2, fill=self.palette["scroll_hover" if st["h"] else "scroll"])
-        st["draw"] = draw
-        target.configure(yscrollcommand=lambda lo, hi: (st.__setitem__("r", (float(lo), float(hi))), draw()))
-        mv = lambda e: target.yview_moveto(max(0.0, min(1.0 - (st["r"][1] - st["r"][0]), e.y / max(sc.winfo_height(), 1) - (st["r"][1] - st["r"][0]) / 2)))
-        def on_leave(e: tk.Event) -> None:
-            w = parent.winfo_containing(e.x_root, e.y_root)
-            st["p"] = w is not None and (w is parent or str(w).startswith(f"{parent}."))
-            draw()
-        [sc.bind(ev, fn) for ev, fn in (("<Configure>", lambda _e: draw()), ("<Enter>", lambda _e: (st.update(p=True, h=True), draw())), ("<Leave>", lambda _e: (st.__setitem__("h", False), draw())), ("<Button-1>", mv), ("<B1-Motion>", mv))]
-        parent.bind("<Enter>", lambda _e: (st.__setitem__("p", True), draw()), add="+"), parent.bind("<Leave>", on_leave, add="+")
-        self._scrolls.append(st), target.pack(side="left", fill="both", expand=True)
-        return sc
-
-    def _build_side(self) -> None:
-        self.side = side = self._mk(tk.Frame, self.root, {"side": "left", "fill": "y"}, {"bg": "panel"}, width=SIDE_WIDE)
-        side.pack_propagate(False)
-        head = self._mk(tk.Frame, side, {"fill": "x"}, {"bg": "panel"}, height=HEADER_H, padx=SP_MD, pady=SP_LG)
-        head.pack_propagate(False)
-        self.search_entry, self.search_placeholder = self._make_pill(head, SEARCH_H, "Search", self.btn, 32, True, self._refresh, {"fill": "both", "expand": True})
-        self._mk(tk.Frame, side, {"fill": "x"}, {"bg": "border"}, height=1)
-        body = self._mk(tk.Frame, side, {"fill": "both", "expand": True}, {"bg": "panel"})
-        self.peers = self._mk(tk.Canvas, body, None, {"bg": "panel"}, width=SIDE_WIDE - SCROLL_W, highlightthickness=0, bd=0)
-        self.peers_scroll = self._make_scroll(body, self.peers, "panel")
-        [self.peers.bind(ev, fn) for ev, fn in (("<Button-1>", lambda e: self._open_chat(int(self.peers.canvasy(e.y) // ROW_HEIGHT))), ("<Motion>", lambda e: self._hover_peer(int(self.peers.canvasy(e.y) // ROW_HEIGHT))), ("<Leave>", lambda _e: self._hover_peer(None)))]
-        self._mk(tk.Frame, side, {"fill": "x"}, {"bg": "border"}, height=1)
-        foot = self._mk(tk.Frame, side, {"fill": "x"}, {"bg": "panel"}, padx=SP_XS, pady=SP_SM)
-        bp = {"bg": "input_bg", "fg": "text", "activebackground": "hover", "activeforeground": "text"}
-        self.status_button, self.theme_button = [self._mk(tk.Button, foot, {"side": "left", "fill": "x", "expand": True, "padx": px}, bp, text="", command=cmd, font=self.btn, relief="flat", cursor="hand2", padx=SP_XS, pady=5, bd=0) for cmd, px in ((self._change_status, (0, SP_XS)), (self._toggle_theme, (SP_XS, 0)))]
-        self._mk(tk.Frame, self.root, {"side": "left", "fill": "y"}, {"bg": "border"}, width=1)
-
-    def _build_chat(self) -> None:
-        self.main = self._mk(tk.Frame, self.root, {"side": "left", "fill": "both", "expand": True}, {"bg": "bg"})
-        header = self._mk(tk.Frame, self.main, {"fill": "x"}, {"bg": "panel"}, height=HEADER_H, padx=SP_LG)
-        header.pack_propagate(False)
-        self.header_avatar = self._mk(tk.Canvas, header, None, {"bg": "panel"}, width=HEADER_AVATAR, height=HEADER_AVATAR, highlightthickness=0, bd=0)
-        self.header_info = self._mk(tk.Frame, header, {"side": "left", "fill": "x", "expand": True, "pady": (0, 2)}, {"bg": "panel"})
-        self.partner = self._mk(tk.Label, self.header_info, {"fill": "x"}, {"bg": "panel", "fg": "text"}, text=EMPTY_TITLE, font=self.title, anchor="w", pady=0, bd=0)
-        self.partner_sub = self._mk(tk.Label, self.header_info, {"fill": "x"}, {"bg": "panel", "fg": "muted"}, text=EMPTY_PROMPT, font=self.sub, anchor="w", pady=0, bd=0)
-        self.header_badge = self._mk(tk.Canvas, header, None, {"bg": "panel"}, width=72, height=22, highlightthickness=0, bd=0)
-        self._mk(tk.Frame, self.main, {"fill": "x"}, {"bg": "border"}, height=1)
-        self._build_input()
-        self.chat_body = self._mk(tk.Frame, self.main, {"side": "top", "fill": "both", "expand": True}, {"bg": "bg"})
-        self.empty_hint = self._mk(tk.Label, self.chat_body, None, {"bg": "bg", "fg": "muted"}, text=EMPTY_PROMPT, font=self.btn, anchor="center")
-        self.log = self._mk(tk.Text, self.chat_body, None, {"bg": "bg", "fg": "text"}, state="disabled", wrap="word", width=64, height=22, relief="flat", highlightthickness=0, padx=SP_LG, pady=SP_MD, cursor="arrow")
-        self.log_scroll = self._make_scroll(self.chat_body, self.log, "bg")
-        self.log.bind("<Configure>", self._on_log_resize), self.log.bind("<Destroy>", lambda _e: self._scroll_end(True))
-        [self.log.tag_configure(tag, **opts) for tag, opts in (("mine", {"justify": "right", "rmargin": SP_XS}), ("other", {"justify": "left", "lmargin1": SP_XS}), ("grp_first", {"spacing1": SP_MD}), ("grp_next", {"spacing1": SP_XS}),
-         ("plain", {"font": self.mono, "spacing1": 2}), ("date", {"justify": "center", "spacing1": SP_MD, "spacing3": SP_SM}), ("info", {"justify": "center", "spacing1": SP_SM, "spacing3": SP_XS}), ("error", {"justify": "center", "spacing1": SP_SM, "spacing3": SP_XS}))]
-        self.empty_state = self._mk(tk.Frame, self.chat_body, None, {"bg": "bg"})
-        self.empty_pill = self._mk(tk.Canvas, self.empty_state, None, {"bg": "bg"}, width=320, height=64, highlightthickness=0, bd=0)
-        self.empty_pill.place(relx=0.5, rely=0.5, anchor="center")
-
-    def _build_input(self) -> None:
-        self.transfer = self._mk(tk.Frame, self.main, None, {"bg": "bg"}, padx=SP_LG, pady=SP_SM)
-        self.transfer_card = self._mk(tk.Canvas, self.transfer, {"fill": "x"}, {"bg": "bg"}, height=50, highlightthickness=0, bd=0)
-        self.transfer_card.bind("<Configure>", lambda _e: self._draw_transfer_card())
-        self.bar, self.input_bar = {"value": 0}, self._mk(tk.Frame, self.main, {"side": "bottom", "fill": "x"}, {"bg": "panel"}, padx=SP_LG, pady=SP_SM)
-        self._input_div = self._mk(tk.Frame, self.main, {"side": "bottom", "fill": "x"}, {"bg": "border"}, height=1)
-        self.file_button = self._mk(tk.Canvas, self.input_bar, {"side": "left", "padx": (0, SP_SM)}, {"bg": "panel"}, width=BTN_SIZE, height=BTN_SIZE, highlightthickness=0, bd=0, cursor="hand2")
-        [self.file_button.bind(ev, fn) for ev, fn in (("<Button-1>", lambda _e: self._send_file()), ("<Enter>", lambda _e: self._draw_attach_btn(True)), ("<Leave>", lambda _e: self._draw_attach_btn(False)))]
-        self.entry, self.placeholder = self._make_pill(self.input_bar, INPUT_H, EMPTY_INPUT, self.body, SP_LG, False, lambda: (setattr(self, "_send_active", bool(self.entry.get().strip())), self._draw_send_btn()), {"side": "left", "fill": "x", "expand": True})
-        self.entry.bind("<Return>", self._submit), self.entry.bind("<KeyPress>", lambda _e: "break" if self._empty_visible else None)
-        self.send_button = self._mk(tk.Canvas, self.input_bar, {"side": "left", "padx": (SP_SM, 0)}, {"bg": "panel"}, width=INPUT_H, height=INPUT_H, highlightthickness=0, bd=0)
-        self.send_button.bind("<Button-1>", lambda _e: self._submit())
-
-    def _make_pill(self, parent: tk.Misc, h: int, hint: str, font: tkfont.Font, x_pad: int, icon: bool, on_change: Callable[[], None], pack: dict) -> tuple[tk.Entry, tk.Label]:
-        c, var = self._mk(tk.Canvas, parent, pack, {"bg": "panel"}, height=h, highlightthickness=0, bd=0), tk.StringVar()
-        entry = self._mk(tk.Entry, c, None, {"bg": "input_bg", "fg": "text", "insertbackground": "text"}, textvariable=var, font=font, relief="flat", bd=0, highlightthickness=0)
-        ph = self._mk(tk.Label, c, None, {"bg": "input_bg", "fg": "muted"}, text=hint, font=font, anchor="w", cursor="xterm")
-        pill = {"canvas": c, "entry": entry, "var": var, "ph": ph, "h": h, "x": x_pad, "icon": icon, "focused": False, "font": font, "hint": hint}
-        pill["window"] = c.create_window(x_pad, h // 2, window=entry, anchor="w", width=40)
-        self._pills.append(pill)
-        var.trace_add("write", lambda *_a: (on_change(), self._draw_pill(pill))), ph.bind("<Button-1>", lambda _e: entry.focus_set()), c.bind("<Configure>", lambda _e: self._draw_pill(pill))
-        [entry.bind(ev, lambda _e, v=val: (pill.__setitem__("focused", v), self._draw_pill(pill))) for ev, val in (("<FocusIn>", True), ("<FocusOut>", False))]
-        return entry, ph
-
-    def _draw_pill(self, pill: dict[str, object]) -> None:
-        c, p, h, x = pill["canvas"], self.palette, pill["h"], pill["x"]
-        w, dimmed = max(c.winfo_width(), 120), (not pill["icon"]) and self._empty_visible
-        for item in c.find_all():
-            if item != pill["window"]: c.delete(item)
-        fill = p["bg"] if dimmed else p["input_focus" if pill["focused"] else "input_bg"]
-        rounded_rect(c, 1, 1, w - 2, h - 2, (h - 2) // 2, fill=fill, outline=p["accent" if pill["focused"] and not dimmed else "border"], width=1)
-        if pill["icon"]:
-            c.create_oval(12, h // 2 - 5, 20, h // 2 + 3, outline=p["muted"], width=1.6), c.create_line(19, h // 2 + 2, 23, h // 2 + 6, fill=p["muted"], width=1.8, capstyle="round")
-        inner_w = max(w - x - SP_LG, 40)
-        pill["entry"].configure(bg=fill, cursor="arrow" if dimmed else "xterm", takefocus=0 if dimmed else 1)
-        pill["ph"].configure(bg=fill, text=truncate_text(str(pill["hint"]), pill["font"], inner_w), cursor="arrow" if dimmed else "xterm")
-        c.coords(pill["window"], x, h // 2), c.itemconfigure(pill["window"], width=inner_w), c.tag_raise(pill["window"])
-        pill["ph"].place(x=x, y=h // 2, anchor="w") if not pill["var"].get() else pill["ph"].place_forget()
-
-    def _draw_send_btn(self) -> None:
-        c, p, m = self.send_button, self.palette, INPUT_H // 2
-        c.delete("all"), rounded_rect(c, 1, 1, INPUT_H - 2, INPUT_H - 2, R_PILL - 1, fill=p["accent" if self._send_active else "dim"])
-        c.create_polygon((m - 5, m - 5, m + 6, m, m - 5, m + 5, m - 3, m), fill="#FFFFFF", outline=""), c.configure(cursor="hand2" if self._send_active else "")
-
-    def _draw_attach_btn(self, hovered: bool = False) -> None:
-        c, p, m = self.file_button, self.palette, BTN_SIZE // 2
-        c.delete("all"), rounded_rect(c, 1, 1, BTN_SIZE - 2, BTN_SIZE - 2, BTN_SIZE // 2, fill=p["hover" if hovered else "input_bg"])
-        c.create_line(m - 5, m, m + 5, m, fill=p["muted"], width=2, capstyle="round"), c.create_line(m, m - 5, m, m + 5, fill=p["muted"], width=2, capstyle="round")
-
-    def _draw_transfer_card(self) -> None:
-        c, p, pct, w = self.transfer_card, self.palette, self.bar["value"], max(self.transfer_card.winfo_width(), 240)
-        c.delete("all"), rounded_rect(c, 1, 1, w - 2, 48, R_CARD, fill=p["panel"], outline=p["border"], width=1)
-        lbl = truncate_text(self._transfer_label, self.btn_bold, max(w - 2 * SP_LG - self.btn_bold.measure(f"{pct}%") - SP_SM, 60))
-        c.create_text(SP_LG, 17, text=lbl, anchor="w", fill=p["text"], font=self.btn_bold), c.create_text(w - SP_LG, 17, text=f"{pct}%", anchor="e", fill=p["accent"], font=self.btn_bold)
-        rounded_rect(c, SP_LG, 33, w - SP_LG, 37, 2, fill=p["border"])
-        if (fw := int((w - 2 * SP_LG) * max(0, min(100, pct)) / 100)) > 0: rounded_rect(c, SP_LG, 33, SP_LG + max(fw, 4), 37, 2, fill=p["accent"])
-
-    def _apply_theme(self) -> None:
-        self.palette = DARK if self._dark else LIGHT
-        [w.configure(**{k: self.palette[v] for k, v in opts.items()}) for w, opts in self._paints]
-        self.root.configure(bg=self.palette["bg"])
-        [self.log.tag_configure(tag, foreground=self.palette[fk], font=fn) for tag, fk, fn in (("date", "muted", self.btn_bold), ("info", "muted", self.sub), ("error", "error", self.sub), ("plain", "text", self.mono))]
-        self.theme_button.configure(text="Light mode" if self._dark else "Dark mode"), self.status_button.configure(text=f"Status: {self._status}")
-        [sc["draw"]() for sc in self._scrolls], self._draw_send_btn(), self._draw_attach_btn(), [self._draw_pill(pill) for pill in self._pills]
-        if self._transferring: self._draw_transfer_card()
-        self._signature = ()
-        self._refresh()
-        self.log.configure(state="normal"), self.log.delete("1.0", "end"), self.log.configure(state="disabled"), self._bubble_widgets.clear()
-        self._last_msg_date = None
-        [self._render(idx) for idx in range(len(self._history))]
+        self.entry.focus_set()
+        self.root.mainloop()
+        self.stop.set()
+        worker.join()
 
     def set_theme(self, name: str) -> None:
         self._dark = name == "dark"
         self._apply_theme()
 
-    def _toggle_theme(self) -> None:
-        self.set_theme("light" if self._dark else "dark")
-
     def message_texts(self) -> list[str]:
-        return [e[2] for e in self._history if e[0] in ("mine", "other")]
+        return self.view.message_texts()
 
     def sidebar_texts(self) -> list[str]:
-        return [self.peers.itemcget(i, "text") for i in self.peers.find_all() if self.peers.type(i) == "text"]
+        canvas = self.peers
+        return [canvas.itemcget(item, "text") for item in canvas.find_all() if canvas.type(item) == "text"]
 
     def partner_title(self) -> str:
         return self.partner.cget("text")
@@ -261,51 +138,216 @@ class GuiTerminal:
         return self._transferring
 
     def log_text(self) -> str:
-        parts = [self.log.get("1.0", "end").strip(), *self.message_texts(), EMPTY_PROMPT if self._empty_visible else ""]
-        return "\n".join(p for p in parts if p)
+        parts = [self.view.visible_text(), *self.message_texts()]
+        if self._empty_visible:
+            parts.append(EMPTY_PROMPT)
+        return "\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _enable_sharp_text() -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            pass
+
+    def _paint(self, widget: tk.Widget, **mapping: str) -> tk.Widget:
+        self._paints.append((widget, mapping))
+        return widget
+
+    def _hairline(self, parent: tk.Misc, vertical: bool = False, **pack: object) -> None:
+        line = self._paint(tk.Frame(parent), bg="line")
+        if vertical:
+            line.configure(width=1)
+        else:
+            line.configure(height=1)
+        line.pack(**pack)
+
+    def _build_side(self) -> None:
+        self.side = self._paint(tk.Frame(self.root, width=SIDE_WIDE), bg="panel")
+        self.side.pack(side="left", fill="y")
+        self.side.pack_propagate(False)
+
+        top = self._paint(tk.Frame(self.side, height=HEADER_H, padx=SP_MD, pady=SP_MD), bg="panel")
+        top.pack(fill="x")
+        top.pack_propagate(False)
+        self.search = PillInput(top, SEARCH_H, "Search", self.fonts.btn, 36, True, self._refresh, "panel")
+        self.search.pack(fill="both", expand=True)
+        self.search_entry = self.search.entry
+        self._themed.append(self.search)
+
+        body = self._paint(tk.Frame(self.side), bg="panel")
+        body.pack(fill="both", expand=True)
+        self.peers = self._paint(
+            tk.Canvas(body, width=SIDE_WIDE - SCROLL_W, highlightthickness=0, bd=0), bg="panel",
+        )
+        self.peers_scroll = SlimScrollbar(body, self.peers, "panel")
+        self.peers_scroll.pack(side="right", fill="y")
+        self.peers.pack(side="left", fill="both", expand=True)
+        self.peers.bind("<Button-1>", self._on_peer_click)
+        self.peers.bind("<Motion>", self._on_peer_motion)
+        self.peers.bind("<Leave>", self._on_peer_leave)
+        self._themed.append(self.peers_scroll)
+
+        footer = self._paint(tk.Frame(self.side, padx=SP_MD, pady=SP_MD), bg="panel")
+        footer.pack(fill="x")
+        self.status_button = PillButton(footer, FOOTER_BUTTON_H, self.fonts.btn, self._change_status, "panel")
+        self.status_button.pack(side="left", fill="x", expand=True, padx=(0, SP_XS))
+        self.theme_button = PillButton(footer, FOOTER_BUTTON_H, self.fonts.btn, self._toggle_theme, "panel")
+        self.theme_button.pack(side="left", fill="x", expand=True, padx=(SP_XS, 0))
+        self._themed.extend((self.status_button, self.theme_button))
+        self._hairline(self.root, vertical=True, side="left", fill="y")
+
+    def _build_chat(self) -> None:
+        self.main = self._paint(tk.Frame(self.root), bg="bg")
+        self.main.pack(side="left", fill="both", expand=True)
+        self._build_header()
+        self._hairline(self.main, fill="x")
+        self._build_input()
+        self.chat_body = self._paint(tk.Frame(self.main), bg="bg")
+        self.chat_body.pack(side="top", fill="both", expand=True)
+        self.view = ConversationView(self.chat_body, self.fonts, self._on_view_resize)
+        self.log = self.view.text
+        self.view.pack(fill="both", expand=True)
+        self._themed.append(self.view)
+        self.empty_hint = self._paint(
+            tk.Label(self.chat_body, text=EMPTY_PROMPT, font=self.fonts.btn, anchor="center"), bg="bg", fg="subtle",
+        )
+        self.empty_state = self._paint(tk.Frame(self.chat_body), bg="bg")
+        self.empty_art = self._paint(tk.Canvas(self.empty_state, highlightthickness=0, bd=0), bg="bg")
+        self.empty_art.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _build_header(self) -> None:
+        header = self._paint(tk.Frame(self.main, height=HEADER_H, padx=SP_LG), bg="bg")
+        header.pack(fill="x")
+        header.pack_propagate(False)
+        self.header_avatar = self._paint(
+            tk.Canvas(header, width=AVATAR_SIZE + 2, height=AVATAR_SIZE + 2, highlightthickness=0, bd=0), bg="bg",
+        )
+        self.header_info = self._paint(tk.Frame(header), bg="bg")
+        self.header_info.pack(side="left", fill="x", expand=True, pady=(0, 2))
+        self.partner = self._paint(
+            tk.Label(self.header_info, text=EMPTY_TITLE, font=self.fonts.title, anchor="w", pady=0, bd=0),
+            bg="bg", fg="text",
+        )
+        self.partner.pack(fill="x")
+        self.partner_sub = self._paint(
+            tk.Label(self.header_info, text=EMPTY_PROMPT, font=self.fonts.sub, anchor="w", pady=0, bd=0),
+            bg="bg", fg="muted",
+        )
+        self.partner_sub.pack(fill="x")
+
+    def _build_input(self) -> None:
+        self.transfer = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_SM), bg="bg")
+        self.transfer_card = self._paint(
+            tk.Canvas(self.transfer, height=CARD_H, highlightthickness=0, bd=0), bg="bg",
+        )
+        self.transfer_card.pack(fill="x")
+        self.transfer_card.bind("<Configure>", lambda _event: self._draw_transfer_card())
+
+        self.input_bar = self._paint(tk.Frame(self.main, padx=SP_LG, pady=SP_MD), bg="bg")
+        self.input_bar.pack(side="bottom", fill="x")
+        self._hairline(self.main, side="bottom", fill="x")
+        self.file_button = IconButton(self.input_bar, ATTACH_SIZE, paint_plus, self._send_file, "bg", accent=False)
+        self.file_button.pack(side="left", padx=(0, SP_SM))
+        self.input = PillInput(
+            self.input_bar, INPUT_H, EMPTY_INPUT, self.fonts.body, SP_LG, False, self._on_input_change, "bg",
+        )
+        self.input.pack(side="left", fill="x", expand=True)
+        self.entry = self.input.entry
+        self.entry.bind("<Return>", self._submit)
+        self.entry.bind("<KeyPress>", self._block_typing)
+        self.send_button = IconButton(self.input_bar, INPUT_H, paint_send, self._submit, "bg", accent=True)
+        self.send_button.pack(side="left", padx=(SP_SM, 0))
+        self.send_button.set_enabled(False)
+        self._themed.extend((self.file_button, self.input, self.send_button))
+
+    def _apply_theme(self) -> None:
+        self.palette = palette = DARK if self._dark else LIGHT
+        for widget, mapping in self._paints:
+            widget.configure(**{option: palette[key] for option, key in mapping.items()})
+        self.root.configure(bg=palette["bg"])
+        for themed in self._themed:
+            themed.apply_palette(palette)
+        self._update_footer_buttons()
+        if self._transferring:
+            self._draw_transfer_card()
+        self._signature = ()
+        self._refresh()
+
+    def _update_footer_buttons(self) -> None:
+        self.status_button.configure_content(self._status.capitalize(), dot_color=STATUS_COLORS[self._status])
+        label, icon = ("Light", paint_sun) if self._dark else ("Dark", paint_moon)
+        self.theme_button.configure_content(label, icon=icon)
+
+    def _toggle_theme(self) -> None:
+        self.set_theme("light" if self._dark else "dark")
 
     def _on_root_resize(self, event: tk.Event) -> None:
-        if event.widget is self.root and event.width >= 100:
-            sw = SIDE_NARROW if event.width < 800 else (SIDE_MID if event.width < 900 else SIDE_WIDE)
-            if sw != self._side_width:
-                self._side_width = sw
-                self.side.configure(width=sw), self.peers.configure(width=sw - SCROLL_W), self._draw_peers(self._rows)
+        if event.widget is not self.root or event.width < 100:
+            return
+        if event.width < NARROW_BELOW:
+            side_width = SIDE_NARROW
+        elif event.width < MID_BELOW:
+            side_width = SIDE_MID
+        else:
+            side_width = SIDE_WIDE
+        if side_width == self._side_width:
+            return
+        self._side_width = side_width
+        self.side.configure(width=side_width)
+        self.peers.configure(width=side_width - SCROLL_W)
+        self._draw_peers()
 
-    def _scroll_end(self, cancel_only: bool = False) -> None:
-        if self._scroll_job:
-            try:
-                self.root.after_cancel(self._scroll_job)
-            except tk.TclError:
-                pass
-            self._scroll_job = None
-        if not cancel_only:
-            self.log.update_idletasks(), self.log.yview_moveto(1.0)
-            self._scroll_job = self.root.after_idle(lambda: (setattr(self, "_scroll_job", None), self.log.yview_moveto(1.0) if self.log.winfo_exists() else None))
-
-    def _on_log_resize(self, event: tk.Event) -> None:
-        if event.width > 40 and abs(event.width - self._log_width) > 2:
-            self._log_width = event.width
-            [self._layout_bubble(c, i) for i, c in self._bubble_widgets.items()]
-            self._update_header(self._partner), self._scroll_end()
+    def _on_view_resize(self) -> None:
+        self._update_header(self._partner)
 
     def _wheel(self, event: tk.Event) -> None:
         step = -1 if event.num == 4 or getattr(event, "delta", 0) > 0 else 1
-        target = self.peers if event.widget in (self.peers, self.peers_scroll) else self.log
-        if not ((target is self.peers and self.peers.yview() == (0.0, 1.0)) or (target is self.log and self.empty_state.winfo_manager() == "place")):
+        if event.widget in (self.peers, self.peers_scroll):
+            target, scrollable = self.peers, self.peers.yview() != (0.0, 1.0)
+        else:
+            target, scrollable = self.log, self.empty_state.winfo_manager() != "place"
+        if scrollable:
             target.yview_scroll(step * 2, "units")
 
-    def _hover_peer(self, idx: int | None) -> None:
-        hovered = idx if idx is not None and 0 <= idx < len(self._rows) else None
-        if hovered != self._hover_idx:
-            self._hover_idx = hovered
-            self.peers.configure(cursor="hand2" if hovered is not None else ""), self._draw_peers(self._rows)
+    def _on_peer_click(self, event: tk.Event) -> None:
+        self._open_chat(int(self.peers.canvasy(event.y) // ROW_HEIGHT))
+
+    def _on_peer_motion(self, event: tk.Event) -> None:
+        self._hover_peer(int(self.peers.canvasy(event.y) // ROW_HEIGHT))
+
+    def _on_peer_leave(self, _event: tk.Event) -> None:
+        self._hover_peer(None)
+
+    def _hover_peer(self, index: int | None) -> None:
+        if index is not None and not 0 <= index < len(self._rows):
+            index = None
+        if index == self._hover_index:
+            return
+        self._hover_index = index
+        self.peers.configure(cursor="hand2" if index is not None else "")
+        self._draw_peers()
+
+    def _block_typing(self, _event: tk.Event) -> str | None:
+        return "break" if self._empty_visible else None
+
+    def _on_input_change(self) -> None:
+        self._send_active = bool(self.entry.get().strip())
+        self.send_button.set_enabled(self._send_active)
 
     def _submit(self, _event: object = None) -> None:
-        if text := self.entry.get().strip():
-            self._in.put(text), self.entry.delete(0, "end")
+        text = self.entry.get().strip()
+        if text:
+            self._in.put(text)
+            self.entry.delete(0, "end")
 
     def _send_file(self) -> None:
-        if path := filedialog.askopenfilename():
+        path = filedialog.askopenfilename()
+        if path:
             self._in.put(f"/send {path}")
 
     def _open_chat(self, index: int) -> None:
@@ -314,139 +356,192 @@ class GuiTerminal:
 
     def _change_status(self) -> None:
         self._status = "away" if self._status == "online" else "online"
-        self.status_button.configure(text=f"Status: {self._status}"), self._in.put(f"/status {self._status}")
+        self._update_footer_buttons()
+        self._in.put(f"/status {self._status}")
 
-    def _handle_transfer(self, kind: str, text: str) -> bool:
-        if kind == "info" and (step := TRANSFER_STEP.fullmatch(text)) and self._transferring:
-            self.bar["value"] = int(step[2])
-            self._draw_transfer_card()
-            return True
-        if kind == "info" and (start := TRANSFER_START.fullmatch(text)):
-            self._transfer_label, self.bar["value"], self._transferring = f"Transferring {start[1]}", 0, True
-            self.transfer.pack(side="bottom", fill="x", before=self.chat_body), self._draw_transfer_card()
-        elif (kind == "info" and text.startswith(("Sent ", "Received "))) or kind == "error":
-            self.transfer.pack_forget(), setattr(self, "_transferring", False)
+    def _consume_transfer_notice(self, kind: str, text: str) -> bool:
+        if kind == "info":
+            step = TRANSFER_STEP.fullmatch(text)
+            if step and self._transferring:
+                self.transfer_percent = int(step[2])
+                self._draw_transfer_card()
+                return True
+            start = TRANSFER_START.fullmatch(text)
+            if start:
+                self._begin_transfer(start[1])
+                return False
+            if text.startswith(TRANSFER_DONE_PREFIXES):
+                self._end_transfer()
+        elif kind == "error":
+            self._end_transfer()
         return False
 
-    def _same_group(self, i: int, j: int) -> bool:
-        if i < 0 or j >= len(self._history):
-            return False
-        a, b = self._history[i], self._history[j]
-        return a[0] in ("mine", "other") and a[0] == b[0] and a[1] == b[1] and a[5] == b[5] and b[4] - a[4] < GROUP_WINDOW_SEC
+    def _begin_transfer(self, filename: str) -> None:
+        self._transfer_label = f"Transferring {filename}"
+        self.transfer_percent = 0
+        self._transferring = True
+        self.transfer.pack(side="bottom", fill="x", before=self.chat_body)
+        self._draw_transfer_card()
 
-    def _render(self, idx: int) -> None:
-        kind, _who, text, _stamp, _ts, date_str = self._history[idx]
-        self.log.configure(state="normal")
-        if kind in ("mine", "other"):
-            if date_str != self._last_msg_date:
-                self._last_msg_date = date_str
-                self.log.insert("end", "Today\n", "date")
-            grp = "grp_next" if self._same_group(idx - 1, idx) else "grp_first"
-            canvas = self._bubble_widgets[idx] = tk.Canvas(self.log, highlightthickness=0, bd=0)
-            self._layout_bubble(canvas, idx)
-            start = self.log.index("end-1c")
-            self.log.window_create(start, window=canvas), self.log.tag_add(kind, start), self.log.tag_add(grp, start), self.log.insert("end", "\n", (kind, grp))
-        else:
-            self.log.insert("end", text + "\n", kind)
-        self.log.configure(state="disabled"), self._scroll_end()
-
-    def _layout_bubble(self, canvas: tk.Canvas, idx: int) -> None:
-        kind, who, text, stamp, _ts, _date = self._history[idx]
-        mine, p, is_first, is_last = kind == "mine", self.palette, not self._same_group(idx - 1, idx), not self._same_group(idx, idx + 1)
-        bg, fg, t_fg = p["mine" if mine else "other"], p["mine_text" if mine else "other_text"], p["mine_time" if mine else "other_time"]
-        max_w = max(int(max(self._log_width - 2 * SP_LG, 300) * WRAP_SHARE) - 2 * SP_MD, 120)
-        canvas.delete("all")
-        tid = canvas.create_text(0, 0, text=text, font=self.body, width=max_w, anchor="nw", fill=fg, justify="left")
-        box = canvas.bbox(tid)
-        tw, th = (box[2] - box[0], box[3] - box[1]) if box else (0, self.body.metrics("linespace"))
-        sw, sh = (self.btn_bold.measure(who), self.btn_bold.metrics("linespace") + 2) if (not mine) and is_first else (0, 0)
-        time_w, time_h = (self.small.measure(stamp), self.small.metrics("linespace")) if is_last else (0, 0)
-        inline = is_last and "\n" not in text and th <= self.body.metrics("linespace") * 1.4 and tw + SP_SM + time_w <= max_w
-        bw, bh = max(sw, tw + SP_SM + time_w if inline else max(tw, time_w)) + 2 * SP_MD, sh + (max(th, time_h) if inline else th + (time_h + 2 if is_last else 0)) + 2 * SP_SM
-        radii = (R_BUBBLE if mine or is_first else R_TOUCH, R_BUBBLE if not mine or is_first else R_TOUCH, (R_TAIL if is_last else R_TOUCH) if mine else R_BUBBLE, (R_TAIL if is_last else R_TOUCH) if not mine else R_BUBBLE)
-        canvas.configure(width=bw, height=bh, bg=p["bg"]), canvas.tag_lower(rounded_rect(canvas, 0, 0, bw - 1, bh - 1, radii, fill=bg)), canvas.coords(tid, SP_MD, SP_SM + sh)
-        if (not mine) and is_first: canvas.create_text(SP_MD, SP_SM, text=who, anchor="nw", fill=p["accent"], font=self.btn_bold)
-        if is_last: canvas.create_text(bw - SP_MD, bh - SP_SM, text=stamp, anchor="se", fill=t_fg, font=self.small)
+    def _end_transfer(self) -> None:
+        self.transfer.pack_forget()
+        self._transferring = False
 
     def _drain(self) -> None:
         while not self._out.empty():
-            for line in self._out.get_nowait().split("\n"):
-                kind, who, text = classify(line, self.name)
-                if not self._handle_transfer(kind, text):
-                    idx = len(self._history)
-                    self._history.append((kind, who, text, time.strftime("%H:%M"), time.time(), time.strftime("%Y-%m-%d")))
-                    if idx > 0 and self._same_group(idx - 1, idx) and idx - 1 in self._bubble_widgets: self._layout_bubble(self._bubble_widgets[idx - 1], idx - 1)
-                    self._render(idx)
+            for raw in self._out.get_nowait().split("\n"):
+                kind, who, text = classify(raw, self.name)
+                if self._consume_transfer_notice(kind, text):
+                    continue
+                line = LogLine(kind, who, text, time.strftime("%H:%M"), time.time(), time.strftime("%Y-%m-%d"))
+                self.view.append(line)
         self._sync_empty_view()
 
     def _refresh(self) -> None:
         query = self.search_entry.get().strip().lower()
-        peers = [p for p in self.store.get_peers() if not query or query in p.name.lower()]
+        peers = [peer for peer in self.store.get_peers() if not query or query in peer.name.lower()]
         current = self.state.current
-        rows = [(p.name, p.status, self.state.unread(p.peer_id), p.peer_id == current) for p in peers]
+        rows = [PeerRow(p.name, p.status, self.state.unread(p.peer_id), p.peer_id == current) for p in peers]
         partner = self.store.get(current) if current else None
-        sig = (tuple(rows), (partner.name, partner.status, partner.ip, partner.tcp_port) if partner else None, self._dark, query)
-        if sig != self._signature:
-            was_empty = self._empty_visible
-            self._signature, self._rows, self._peer_names, self._partner = sig, rows, [r[0] for r in rows], partner
-            if not was_empty and not partner: self._empty_since = len(self._history)
-            self._draw_peers(rows), self._update_header(partner), self._draw_pill(self._pills[0])
+        about = (partner.name, partner.status, partner.ip, partner.tcp_port) if partner else None
+        signature = (tuple(rows), about, self._dark, query)
+        if signature == self._signature:
+            return
+        was_empty = self._empty_visible
+        self._signature = signature
+        self._rows = rows
+        self._peer_names = [row.name for row in rows]
+        self._partner = partner
+        if not was_empty and not partner:
+            self._empty_since = len(self.view.lines)
+        self._draw_peers()
+        self._update_header(partner)
+        self.search.draw()
 
-    def _draw_avatar(self, c: tk.Canvas, x: int, y: int, sz: int, name: str, font: tkfont.Font) -> None:
-        c.create_oval(x, y, x + sz, y + sz, fill=PEER_COLORS[sum(map(ord, name)) % len(PEER_COLORS)], width=0)
-        c.create_text(x + sz // 2, y + sz // 2, text=name[0].upper(), fill="#FFFFFF", font=font)
+    def _draw_peers(self) -> None:
+        canvas, palette = self.peers, self.palette
+        canvas.delete("all")
+        width = self._side_width - SCROLL_W
+        for index, row in enumerate(self._rows):
+            top = index * ROW_HEIGHT
+            if row.active:
+                background = palette["selected"]
+            elif index == self._hover_index:
+                background = palette["hover"]
+            else:
+                background = palette["panel"]
+            if background != palette["panel"]:
+                row_box = (ROW_INSET, top + 2, width - ROW_INSET, top + ROW_HEIGHT - 2)
+                draw_rounded(canvas, *row_box, ROW_RADIUS, background)
+            self._draw_peer_row(canvas, row, top, width, background)
+        canvas.configure(scrollregion=(0, 0, width, max(len(self._rows) * ROW_HEIGHT, 1)))
+
+    def _draw_peer_row(self, canvas: tk.Canvas, row: PeerRow, top: int, width: int, background: str) -> None:
+        palette, fonts = self.palette, self.fonts
+        x = ROW_INSET + SP_SM
+        y = top + (ROW_HEIGHT - AVATAR_SIZE) // 2
+        draw_avatar(canvas, x, y, AVATAR_SIZE, row.name, fonts.bold)
+        dot = (x + AVATAR_SIZE - DOT_SIZE, y + AVATAR_SIZE - DOT_SIZE)
+        draw_presence_dot(canvas, dot[0], dot[1], DOT_SIZE, STATUS_COLORS[row.status], background)
+        right = width - ROW_INSET - SP_SM
+        if row.unread:
+            right = self._draw_unread_badge(canvas, row.unread, right, top) - SP_SM
+        text_x = x + AVATAR_SIZE + SP_MD
+        name = truncate_text(row.name, fonts.bold, right - text_x)
+        canvas.create_text(text_x, top + 22, text=name, anchor="w", fill=palette["text"], font=fonts.bold)
+        canvas.create_text(text_x, top + 40, text=row.status, anchor="w", fill=palette["muted"], font=fonts.sub)
+
+    def _draw_unread_badge(self, canvas: tk.Canvas, unread: int, right: int, top: int) -> int:
+        label = "99+" if unread > 99 else str(unread)
+        left = right - max(BADGE_H, self.fonts.btn_bold.measure(label) + SP_MD)
+        badge_top = top + (ROW_HEIGHT - BADGE_H) // 2
+        draw_rounded(canvas, left, badge_top, right, badge_top + BADGE_H, BADGE_H // 2, self.palette["accent"])
+        centre = ((left + right) // 2, badge_top + BADGE_H // 2)
+        canvas.create_text(*centre, text=label, fill=self.palette["on_accent"], font=self.fonts.btn_bold)
+        return left
+
+    def _update_header(self, partner: object | None) -> None:
+        self._empty_visible = partner is None
+        available = max(self.view.width - 2 * SP_LG - (AVATAR_SIZE + SP_MD if partner else 0), 120)
+        if partner:
+            title = truncate_text(partner.name, self.fonts.title, available)
+            subtitle = f"{partner.status}  ·  {partner.ip}:{partner.tcp_port}"
+            self.input.hint = f"Message {partner.name}"
+            self.header_avatar.pack(side="left", before=self.header_info, padx=(0, SP_MD))
+            self._draw_header_avatar(partner)
+        else:
+            title, subtitle = EMPTY_TITLE, EMPTY_PROMPT
+            self.input.hint = EMPTY_INPUT
+            self.header_avatar.pack_forget()
+        self.partner.configure(text=title)
+        self.partner_sub.configure(text=truncate_text(subtitle, self.fonts.sub, available))
+        self.input.dimmed = self._empty_visible
+        self._sync_empty_view()
+        self.input.draw()
+
+    def _draw_header_avatar(self, partner: object) -> None:
+        canvas = self.header_avatar
+        canvas.delete("all")
+        draw_avatar(canvas, 0, 0, AVATAR_SIZE, partner.name, self.fonts.bold)
+        corner = AVATAR_SIZE - DOT_SIZE
+        color = STATUS_COLORS[partner.status]
+        draw_presence_dot(canvas, corner, corner, DOT_SIZE, color, self.palette["bg"])
 
     def _sync_empty_view(self) -> None:
         if not self._empty_visible:
-            self.empty_state.place_forget(), self.empty_hint.pack_forget()
-            return
-        if any(e[0] in ("info", "error", "plain") for e in self._history[self._empty_since:]):
-            self.empty_state.place_forget(), self.empty_hint.pack(side="bottom", fill="x", before=self.log, pady=(0, SP_SM))
-            return
-        self.empty_hint.pack_forget(), self.empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
-        c, p, max_w = self.empty_pill, self.palette, max(self._log_width - 2 * SP_XL, 200)
-        sub = truncate_text(EMPTY_PROMPT, self.btn, max_w - 2 * SP_LG)
-        w = min(max_w, max(self.empty_title.measure(EMPTY_TITLE), self.btn.measure(sub)) + 2 * SP_XL)
-        c.delete("all"), c.configure(width=w, height=64), rounded_rect(c, 0, 0, w - 1, 63, R_BUBBLE, fill=p["pill_bg"])
-        c.create_text(w // 2, 22, text=EMPTY_TITLE, fill=p["text"], font=self.empty_title), c.create_text(w // 2, 44, text=sub, fill=p["muted"], font=self.btn)
-
-    def _update_header(self, partner: object) -> None:
-        p, self._empty_visible = self.palette, not bool(partner)
-        avail = max(self._log_width - 2 * SP_LG - (HEADER_AVATAR + 96 if partner else 0), 120)
-        self.partner.configure(text=truncate_text(partner.name, self.title, avail) if partner else EMPTY_TITLE), self.partner_sub.configure(text=truncate_text(f"{partner.status}  -  {partner.ip}:{partner.tcp_port}" if partner else EMPTY_PROMPT, self.sub, avail))
-        self._pills[1]["hint"] = f"Message {partner.name}" if partner else EMPTY_INPUT
-        if partner:
-            self.header_avatar.pack(side="left", before=self.header_info, padx=(0, SP_MD)), self.header_badge.pack(side="right")
-            self.header_avatar.delete("all"), self.header_badge.delete("all"), self._draw_avatar(self.header_avatar, 0, 0, HEADER_AVATAR, partner.name, self.bold)
-            rounded_rect(self.header_badge, 1, 1, 70, 20, 10, fill=p["input_bg"], outline=p["border"], width=1)
-            self.header_badge.create_oval(9, 7, 17, 15, fill=STATUS_COLORS[partner.status], width=0), self.header_badge.create_text(23, 11, text=partner.status, anchor="w", fill=p["muted"], font=self.small)
+            self.empty_state.place_forget()
+            self.empty_hint.pack_forget()
+        elif self.view.has_notices_since(self._empty_since):
+            self.empty_state.place_forget()
+            self.empty_hint.pack(side="bottom", fill="x", before=self.view, pady=(0, SP_SM))
         else:
-            self.header_avatar.pack_forget(), self.header_badge.pack_forget()
-        self._sync_empty_view(), self._draw_pill(self._pills[1])
+            self.empty_hint.pack_forget()
+            self.empty_state.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self._draw_empty_art()
 
-    def _draw_peers(self, rows: list[tuple[str, str, int, bool]]) -> None:
-        self.peers.delete("all")
-        p, canvas, w = self.palette, self.peers, self._side_width - SCROLL_W
-        for i, (name, status, unread, active) in enumerate(rows):
-            top, row_bg = i * ROW_HEIGHT, p["row"] if active else (p["hover"] if i == self._hover_idx else p["panel"])
-            canvas.create_rectangle(0, top, w, top + ROW_HEIGHT, fill=row_bg, width=0)
-            x, y = SP_MD, top + (ROW_HEIGHT - AVATAR_SIZE) // 2
-            self._draw_avatar(canvas, x, y, AVATAR_SIZE, name, self.bold)
-            canvas.create_oval(x + AVATAR_SIZE - DOT_SIZE, y + AVATAR_SIZE - DOT_SIZE, x + AVATAR_SIZE, y + AVATAR_SIZE, fill=STATUS_COLORS[status], outline=row_bg, width=2)
-            right = w - SP_MD
-            if unread:
-                label = "99+" if unread > 99 else str(unread)
-                bx1 = right - max(20, self.btn_bold.measure(label) + SP_MD)
-                rounded_rect(canvas, bx1, top + 20, right, top + 40, 10, fill="#FFFFFF" if active else p["accent"])
-                canvas.create_text((bx1 + right) / 2, top + 30, text=label, fill=p["accent"] if active else "#FFFFFF", font=self.btn_bold)
-                right = bx1 - SP_SM
-            tx = x + AVATAR_SIZE + SP_MD
-            canvas.create_text(tx, top + 20, text=truncate_text(name, self.bold, right - tx), anchor="w", fill=p["row_text" if active else "text"], font=self.bold), canvas.create_text(tx, top + 40, text=status, anchor="w", fill=p["row_sub" if active else "muted"], font=self.sub)
-        canvas.configure(scrollregion=(0, 0, w, max(len(rows) * ROW_HEIGHT, 1)))
+    def _draw_empty_art(self) -> None:
+        canvas, palette, fonts = self.empty_art, self.palette, self.fonts
+        prompt = truncate_text(EMPTY_PROMPT, fonts.btn, max(self.view.width - 2 * SP_XL, 200))
+        width = max(fonts.empty_title.measure(EMPTY_TITLE), fonts.btn.measure(prompt)) + 2 * SP_XL
+        centre = width // 2
+        canvas.delete("all")
+        canvas.configure(width=width, height=EMPTY_ART_H)
+        draw_rounded(canvas, centre - 40, 8, centre + 24, 56, (16, 16, 16, 4), palette["selected"])
+        draw_rounded(canvas, centre - 4, 40, centre + 40, 72, (12, 12, 4, 12), palette["chip"])
+        for offset in (-24, -12, 0):
+            draw_circle(canvas, centre + offset - 3, 29, 6, palette["accent"])
+        canvas.create_text(centre, 100, text=EMPTY_TITLE, fill=palette["text"], font=fonts.empty_title)
+        canvas.create_text(centre, 124, text=prompt, fill=palette["muted"], font=fonts.btn)
+
+    def _draw_transfer_card(self) -> None:
+        canvas, palette, fonts = self.transfer_card, self.palette, self.fonts
+        width = max(canvas.winfo_width(), 240)
+        percent = max(0, min(100, self.transfer_percent))
+        canvas.delete("all")
+        draw_rounded_border(canvas, 0, 0, width, CARD_H, CARD_RADIUS, palette["bg"], palette["line"])
+        percent_label = f"{percent}%"
+        room = width - 2 * SP_LG - fonts.btn_bold.measure(percent_label) - SP_SM
+        label = truncate_text(self._transfer_label, fonts.btn_bold, max(room, 60))
+        canvas.create_text(SP_LG, 19, text=label, anchor="w", fill=palette["text"], font=fonts.btn_bold)
+        canvas.create_text(
+            width - SP_LG, 19, text=percent_label, anchor="e", fill=palette["accent"], font=fonts.btn_bold,
+        )
+        track_left, track_right = SP_LG, width - SP_LG
+        draw_rounded(canvas, track_left, 34, track_right, 38, 2, palette["line"])
+        filled = int((track_right - track_left) * percent / 100)
+        if filled > 0:
+            draw_rounded(canvas, track_left, 34, track_left + max(filled, 4), 38, 2, palette["accent"])
 
     def _poll(self) -> None:
-        self._drain(), self._refresh()
-        self.root.after(CLOSE_DELAY_MS if self.stop.is_set() else POLL_MS, self._close if self.stop.is_set() else self._poll)
+        self._drain()
+        self._refresh()
+        if self.stop.is_set():
+            self.root.after(CLOSE_DELAY_MS, self._close)
+        else:
+            self.root.after(POLL_MS, self._poll)
 
     def _close(self) -> None:
-        self.stop.set(), self._drain(), self._scroll_end(True), self.root.destroy()
+        self.stop.set()
+        self._drain()
+        self.view.cancel_scroll()
+        self.root.destroy()

@@ -46,14 +46,10 @@ class TestGuiTerminal(unittest.TestCase):
         return window
 
     def windows(self, window) -> int:
-        return sum(1 for item in window.log.dump("1.0", "end", window=True) if item[0] == "window")
+        return len(window.view.bubbles())
 
     def bubble_widgets(self, window) -> list[tk.Canvas]:
-        return [
-            window.log.nametowidget(item[1])
-            for item in window.log.dump("1.0", "end", window=True)
-            if item[0] == "window"
-        ]
+        return window.view.bubbles()
 
     def bubble_texts(self, canvas: tk.Canvas) -> list[str]:
         return [canvas.itemcget(i, "text") for i in canvas.find_all() if canvas.type(i) == "text"]
@@ -87,7 +83,7 @@ class TestGuiTerminal(unittest.TestCase):
         self.assertTrue(window._transferring)
         window.say("[*] a.bin  40%")
         window._drain()
-        self.assertEqual(window.bar["value"], 40)
+        self.assertEqual(window.transfer_percent, 40)
         self.assertNotIn("40%", window.log.get("1.0", "end"))
         window.say("[*] Sent a.bin ... 100%  Done.")
         window._drain()
@@ -147,7 +143,8 @@ class TestGuiTerminal(unittest.TestCase):
             self.assertIn(expected, shown)
         fills = [window.peers.itemcget(i, "fill") for i in window.peers.find_all()
                  if window.peers.type(i) == "rectangle"]
-        self.assertEqual(fills, [window.palette["row"], window.palette["panel"]])
+        self.assertIn(window.palette["selected"], fills)
+        self.assertNotIn(window.palette["hover"], fills)
 
     def test_header_names_the_current_partner(self) -> None:
         window = self.open([ALICE, BOB])
@@ -176,7 +173,7 @@ class TestGuiTerminal(unittest.TestCase):
         self.assertNotEqual(window.palette["bg"], light)
         self.assertEqual(window.root.cget("bg"), window.palette["bg"])
         self.assertEqual(self.windows(window), 2)
-        self.assertEqual(window.theme_button.cget("text"), "Light mode")
+        self.assertEqual(window.theme_button.text, "Light")
 
     def test_inspection_hooks_report_what_is_on_screen(self) -> None:
         window = self.open([ALICE, BOB])
@@ -232,8 +229,7 @@ class TestGuiTerminal(unittest.TestCase):
         window.say("[Alice] first")
         window.say("[Me] second")
         window._drain()
-        raw = window.log.get("1.0", "end")
-        self.assertEqual(raw.count("Today"), 1)
+        self.assertEqual(window.view.date_chip_texts(), ["Today"])
         self.assertTrue(window.log.tag_ranges("date"))
         self.assertIn("Today", window.log_text())
 
@@ -292,22 +288,25 @@ class TestGuiTerminal(unittest.TestCase):
         window.say("[Alice] hello")
         window._drain()
         bubble = self.bubble_widgets(window)[0]
-        polys = [i for i in bubble.find_all() if bubble.type(i) == "polygon"]
-        self.assertEqual(bubble.itemcget(polys[0], "outline"), "")
+        kinds = {bubble.type(i) for i in bubble.find_all()}
+        self.assertNotIn("polygon", kinds)
+        for item in bubble.find_all():
+            if bubble.type(item) == "rectangle":
+                self.assertEqual(bubble.itemcget(item, "outline"), "")
 
     def test_send_button_is_dimmed_when_empty_and_active_when_filled(self) -> None:
         window = self.open([ALICE])
         self.assertFalse(window._send_active)
-        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["dim"])
+        self.assertFalse(window.send_button.enabled)
         window.entry.insert(0, "   ")
         self.assertFalse(window._send_active)
         window.entry.delete(0, "end")
         window.entry.insert(0, "hello")
         self.assertTrue(window._send_active)
-        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["accent"])
+        self.assertTrue(window.send_button.enabled)
         window._submit()
         self.assertFalse(window._send_active)
-        self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["dim"])
+        self.assertFalse(window.send_button.enabled)
 
     def test_input_stays_mapped_during_vietnamese_edits_and_redraws(self) -> None:
         window = self.open([ALICE])

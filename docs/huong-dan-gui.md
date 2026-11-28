@@ -25,7 +25,7 @@ Cần `tkinter`. Windows và macOS đã có sẵn. Ubuntu cài thêm: `sudo apt 
 |---|---|
 | Cột trái, trên cùng | Ô **Search**: gõ để lọc danh sách theo tên |
 | Cột trái, giữa | Người đang online: avatar màu, tên, trạng thái, chấm xanh (online) hoặc cam (away), huy hiệu số tin chưa đọc |
-| Cột trái, dưới cùng | Nút **Status** (đổi online/away) và nút **Dark mode** (đổi sáng/tối) |
+| Cột trái, dưới cùng | Nút trạng thái (hiện `Online` hoặc `Away`, bấm để đổi) và nút **Dark**/**Light** (đổi sáng/tối) |
 | Thanh tiêu đề | Tên người đang chat, trạng thái, địa chỉ IP và cổng của họ |
 | Khung giữa | Hội thoại: tin nhắn dạng bong bóng và các thông báo của chương trình |
 | Hàng dưới cùng | Nút **+** gửi file, ô nhập tin, nút gửi |
@@ -33,9 +33,9 @@ Cần `tkinter`. Windows và macOS đã có sẵn. Ubuntu cài thêm: `sudo apt 
 ## 3. Chat với một người
 
 1. Chờ người đó xuất hiện ở cột trái (khoảng 3 giây sau khi họ mở chương trình).
-2. **Bấm vào tên** của họ. Hàng đó được tô xanh đặc, thanh tiêu đề hiện tên họ, chương trình tự kết nối.
+2. **Bấm vào tên** của họ. Hàng đó được tô nền chàm nhạt, thanh tiêu đề hiện tên họ, chương trình tự kết nối.
 3. Gõ tin vào ô nhập rồi nhấn **Enter** (hoặc bấm nút gửi). Ô nhập có chữ gợi ý `Message <tên>`.
-4. Tin của bạn là bong bóng xanh lá nhạt bên phải, tin của họ là bong bóng trắng bên trái kèm giờ gửi.
+4. Tin của bạn là bong bóng chàm bên phải, tin của họ là bong bóng xám nhạt bên trái kèm giờ gửi.
 
 Tin liên tiếp của cùng một người trong vòng 5 phút được gộp thành một nhóm: tên chỉ hiện ở tin đầu, giờ ở tin cuối. Nhãn **Today** ngăn cách các ngày.
 
@@ -58,8 +58,8 @@ Bên nhận: file lưu vào thư mục `downloads/` (hoặc thư mục đặt b�
 
 ## 6. Trạng thái và giao diện
 
-- **Status: online / away**: bấm để đổi, những người khác thấy sau khoảng 1 giây (chấm đổi màu).
-- **Dark mode / Light mode**: bấm để đổi giao diện, hội thoại đang có được giữ nguyên.
+- **Nút trạng thái (Online / Away)**: bấm để đổi, những người khác thấy sau khoảng 1 giây (chấm đổi màu).
+- **Dark / Light**: bấm để đổi giao diện, hội thoại đang có được giữ nguyên.
 
 ![Giao diện tối](img/gui-toi.png)
 
