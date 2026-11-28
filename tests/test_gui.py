@@ -309,6 +309,28 @@ class TestGuiTerminal(unittest.TestCase):
         self.assertFalse(window._send_active)
         self.assertEqual(window.send_button.itemcget(window.send_button.find_all()[0], "fill"), window.palette["dim"])
 
+    def test_input_stays_mapped_during_vietnamese_edits_and_redraws(self) -> None:
+        window = self.open([ALICE])
+        window.state.switch_to(ALICE.peer_id)
+        window._refresh()
+        window.root.update()
+        unmapped = []
+        window.entry.bind("<Unmap>", lambda _e: unmapped.append(True), add="+")
+        for text in ("t", "ti", "tie", "tiế", "tiếng", "tiếng Việt", "tiếng Việt "):
+            window.entry.delete(0, "end")
+            window.entry.insert(0, text)
+            window.root.update()
+        window.say("[Alice] hello")
+        window._drain()
+        window._toggle_theme()
+        window.root.geometry("720x520")
+        window.root.update()
+        self.assertEqual(unmapped, [])
+        self.assertEqual(window.entry.get(), "tiếng Việt ")
+        window._submit()
+        self.assertEqual(next(window.lines()), "tiếng Việt")
+        self.assertEqual(window.entry.get(), "")
+
     def test_search_filters_peers_and_open_chat_uses_visible_list(self) -> None:
         window = self.open([ALICE, BOB])
         window._refresh()
