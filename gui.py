@@ -188,6 +188,7 @@ class GuiTerminal:
         entry = self._mk(tk.Entry, c, None, {"bg": "input_bg", "fg": "text", "insertbackground": "text"}, textvariable=var, font=font, relief="flat", bd=0, highlightthickness=0)
         ph = self._mk(tk.Label, c, None, {"bg": "input_bg", "fg": "muted"}, text=hint, font=font, anchor="w", cursor="xterm")
         pill = {"canvas": c, "entry": entry, "var": var, "ph": ph, "h": h, "x": x_pad, "icon": icon, "focused": False, "font": font, "hint": hint}
+        pill["window"] = c.create_window(x_pad, h // 2, window=entry, anchor="w", width=40)
         self._pills.append(pill)
         var.trace_add("write", lambda *_a: (on_change(), self._draw_pill(pill))), ph.bind("<Button-1>", lambda _e: entry.focus_set()), c.bind("<Configure>", lambda _e: self._draw_pill(pill))
         [entry.bind(ev, lambda _e, v=val: (pill.__setitem__("focused", v), self._draw_pill(pill))) for ev, val in (("<FocusIn>", True), ("<FocusOut>", False))]
@@ -196,7 +197,8 @@ class GuiTerminal:
     def _draw_pill(self, pill: dict[str, object]) -> None:
         c, p, h, x = pill["canvas"], self.palette, pill["h"], pill["x"]
         w, dimmed = max(c.winfo_width(), 120), (not pill["icon"]) and self._empty_visible
-        c.delete("all")
+        for item in c.find_all():
+            if item != pill["window"]: c.delete(item)
         fill = p["bg"] if dimmed else p["input_focus" if pill["focused"] else "input_bg"]
         rounded_rect(c, 1, 1, w - 2, h - 2, (h - 2) // 2, fill=fill, outline=p["accent" if pill["focused"] and not dimmed else "border"], width=1)
         if pill["icon"]:
@@ -204,7 +206,7 @@ class GuiTerminal:
         inner_w = max(w - x - SP_LG, 40)
         pill["entry"].configure(bg=fill, cursor="arrow" if dimmed else "xterm", takefocus=0 if dimmed else 1)
         pill["ph"].configure(bg=fill, text=truncate_text(str(pill["hint"]), pill["font"], inner_w), cursor="arrow" if dimmed else "xterm")
-        c.create_window(x, h // 2, window=pill["entry"], anchor="w", width=inner_w)
+        c.coords(pill["window"], x, h // 2), c.itemconfigure(pill["window"], width=inner_w), c.tag_raise(pill["window"])
         pill["ph"].place(x=x, y=h // 2, anchor="w") if not pill["var"].get() else pill["ph"].place_forget()
 
     def _draw_send_btn(self) -> None:
