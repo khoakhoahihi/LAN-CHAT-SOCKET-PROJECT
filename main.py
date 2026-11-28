@@ -27,6 +27,8 @@ def main() -> None:
         parser.error("invalid name")
     if not (0 <= args.port <= 65535 and 0 <= args.udp_port <= 65535):
         parser.error("ports must be in 0-65535")
+    if args.udp_port == 0:
+        parser.error("UDP port must be in 1-65535")
 
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stdin.reconfigure(encoding="utf-8")
